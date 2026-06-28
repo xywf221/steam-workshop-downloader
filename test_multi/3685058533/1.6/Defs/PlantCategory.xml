@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Defs>
+
+<NicePlantsMenu.ForceCategoryChanger>
+	<defName>NPM_FCC_Drugs</defName>
+	<plantDefNames>
+		<li>Plant_Hops</li>
+	</plantDefNames>
+	<category>Drug</category>
+</NicePlantsMenu.ForceCategoryChanger>
+
+</Defs>

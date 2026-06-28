@@ -1,0 +1,65 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<LanguageData>
+  <NPM_Plants>Растения</NPM_Plants>
+  <NPM_Description>Описание</NPM_Description>
+  <NPM_PlantsNotMature>Растения вероятно не успеют созреть до конца сезона</NPM_PlantsNotMature>
+  <NPM_SkillNotSatisfied>Для посадки требуется навык Растениеводство {0}</NPM_SkillNotSatisfied>
+  <NPM_ExpectedDateHarvest>Дата урожая</NPM_ExpectedDateHarvest>
+  <NPM_FormatDays>{0}\n{1} дней</NPM_FormatDays>
+  <NPM_GrowthTemperature>Температура роста</NPM_GrowthTemperature>
+  <NPM_FoodFor>Еда для</NPM_FoodFor>
+  <NPM_Human>людей</NPM_Human>
+  <NPM_Animal>животных</NPM_Animal>
+  <NPM_RequiresFertility>Недостаточная плодородность почвы ({0})</NPM_RequiresFertility>
+  <NPM_CanGrowIn>Может расти в</NPM_CanGrowIn>
+  <NPM_Indoors>помещениях</NPM_Indoors>
+  <NPM_Caves>пещерах</NPM_Caves>
+  <NPM_Amount>Количество</NPM_Amount>
+  <NPM_Cells>{0} клеток</NPM_Cells>
+  <NPM_EnoughToFeed>Достаточно чтобы\nпрокормить</NPM_EnoughToFeed>
+  <NPM_HumanCount>{0} человек</NPM_HumanCount>
+  <NPM_AllColonyPets>Животные колонии</NPM_AllColonyPets>
+  <NPM_AnimalsInPen>Животные в загоне</NPM_AnimalsInPen>
+  <NPM_MoreCells>Нужно еще {0} клеток</NPM_MoreCells>
+  <NPM_DiesInLight>Умирает при свете</NPM_DiesInLight>
+  <NPM_RelatedRecipes>Связанные рецепты</NPM_RelatedRecipes>
+  <NPM_Product>Продукт</NPM_Product>
+  <NPM_PerYear>{0}/год</NPM_PerYear>
+  <NPM_Pollution>Загрязнение</NPM_Pollution>
+  <NPM_Required>Требуется</NPM_Required>
+  <NPM_May>Может расти</NPM_May>
+  <NPM_NoCells>Нет подходящих клеток для этого растения</NPM_NoCells>
+  <NPM_ShouldBeRoofed>Не все клетки защищены от солнечного света</NPM_ShouldBeRoofed>
+  <NPM_MarketValueShort>Стоимость</NPM_MarketValueShort>
+  <NPM_OptimalTemperature>Оптимальная</NPM_OptimalTemperature>
+  <NPM_TotalNutrition>Суммарная питательность</NPM_TotalNutrition>
+  <NPM_None>Нет</NPM_None>
+  <NPM_Sensitivity>Влияние почвы</NPM_Sensitivity>
+  <NPM_SkillRequirements>Требуемый навык</NPM_SkillRequirements>
+
+  <NPM_FeedHumanTip>Если перерабатывать весь урожай, то поле прокормит</NPM_FeedHumanTip>
+  <NPM_CalculatedForAnimals>Рассчитано для животных:</NPM_CalculatedForAnimals>
+  <NPM_DateCalcTip>Ожидается, что рост займет {0} дней\n\nСреднее качество почвы {1}\nСветовой день {2}</NPM_DateCalcTip>
+  <NPM_DateCalcTipWarning>Рост рассчитан при идеальной температуре</NPM_DateCalcTipWarning>
+  <NPM_DateCalcTip_Sun>солнце</NPM_DateCalcTip_Sun>
+  <NPM_DateCalcTip_Lamp>лампа</NPM_DateCalcTip_Lamp>
+  <NPM_DateCalcTip_Darkness>темнота</NPM_DateCalcTip_Darkness>
+
+  <NPM_Filter_Category_Food>Еда</NPM_Filter_Category_Food>
+  <NPM_Filter_Category_Animals>Животные</NPM_Filter_Category_Animals>
+  <NPM_Filter_Category_Medicine>Медицина</NPM_Filter_Category_Medicine>
+  <NPM_Filter_Category_Drug>Наркотики</NPM_Filter_Category_Drug>
+  <NPM_Filter_Category_Misc>Прочее</NPM_Filter_Category_Misc>
+  <NPM_Filter_Category_Tree>Деревья</NPM_Filter_Category_Tree>
+  <NPM_Filter_Category_Pollution>Загрязнение</NPM_Filter_Category_Pollution>
+  <NPM_Filter_Category_Cave>Пещеры</NPM_Filter_Category_Cave>
+  <NPM_Filter_Category_Houseplant>Комнатные</NPM_Filter_Category_Houseplant>
+  <NPM_Filter_Mod_Any>Из модов</NPM_Filter_Mod_Any>
+
+  <NPM_Settings_CountInRow>Количество растений в строке</NPM_Settings_CountInRow>
+  <NPM_Settings_SplitByCategories>Разделить растения по категориям</NPM_Settings_SplitByCategories>
+  <NPM_Settings_ShowCategoryIcons>Показывать иконки категорий</NPM_Settings_ShowCategoryIcons>
+  <NPM_Settings_AlwaysShowAllInfo>Всегда показывать всю информацию</NPM_Settings_AlwaysShowAllInfo>
+  <NPM_Settings_AllowResizeWindow>Разрешить изменять размер окна</NPM_Settings_AllowResizeWindow>
+  <NPM_Settings_ReopenWindow>Откройте окно заново для изменений</NPM_Settings_ReopenWindow>
+</LanguageData>

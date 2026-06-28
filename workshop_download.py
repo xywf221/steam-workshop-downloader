@@ -7,7 +7,8 @@ Uses ValvePython/steam for Steam protocol.
 Uses ctypes to call steamclient64.dll for VSZa chunk decompression.
 
 Usage: pip install steam[client] pysocks
-       python workshop_download.py <AppID> <WorkshopID> [options]
+       python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...] [options]
+       python workshop_download.py 294100 3683834622 3685058533
 """
 
 import argparse
@@ -138,8 +139,8 @@ def patch_vsza():
     CDNClient.get_chunk = vsza_get_chunk
 
 
-def download(app_id: int, workshop_id: int, output_dir: Path,
-             verbose: bool = False, proxy: bool = True) -> Optional[Path]:
+def _init_session(proxy: bool = True):
+    """Initialize Steam session (login + CDN)."""
     if proxy:
         setup_proxy()
     patch_vsza()
@@ -151,19 +152,25 @@ def download(app_id: int, workshop_id: int, output_dir: Path,
     client = SteamClient()
     if client.anonymous_login() != 1:
         print("  [!] Login failed")
-        return None
+        return None, None
     print(f"  [v] Logged on ({client.steam_id})")
 
     print("  [2/4] Getting content servers...")
     cdn = CDNClient(client)
     print(f"  [v] Server: {cdn.get_content_server()}")
+    return client, cdn
 
-    print("  [3/4] Fetching manifest...")
+
+def download_item(cdn, app_id: int, workshop_id: int, output_dir: Path,
+                  verbose: bool = False) -> Optional[Path]:
+    """Download a single workshop item using an existing CDN session."""
+    print(f"\n  --- Workshop {workshop_id} ---")
+    print(f"  [3/4] Fetching manifest...")
     manifest = cdn.get_manifest_for_workshop_item(workshop_id)
     files = list(manifest.iter_files())
     print(f"  [v] '{manifest.name}' - {len(files)} files")
 
-    print("  [4/4] Downloading files...")
+    print(f"  [4/4] Downloading files...")
     out_dir = output_dir / str(workshop_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -192,17 +199,20 @@ def download(app_id: int, workshop_id: int, output_dir: Path,
         print()
     print(f"  [v] {ok}/{len(files)} files")
 
-    try:
-        client.logout()
-    except:
-        pass
-    return out_dir
+    total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
+    cnt = sum(1 for f in out_dir.rglob("*") if f.is_file())
+    print(f"  [v] {cnt} files, {total // 1024} KB -> {out_dir}")
+    return out_dir if ok > 0 else None
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Steam Workshop Downloader v5")
+    p = argparse.ArgumentParser(
+        description="Steam Workshop Downloader v5",
+        epilog="Example: %(prog)s 294100 3683834622 3685058533"
+    )
     p.add_argument("appid", type=int)
-    p.add_argument("workshopid", type=int)
+    p.add_argument("workshopid", type=int, nargs="+",
+                   help="one or more Workshop IDs to download")
     p.add_argument("-o", "--output", default=".")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--no-proxy", action="store_true")
@@ -214,14 +224,28 @@ def main():
     proxy = not args.no_proxy
     output = Path(args.output).resolve()
     print(f"=== Steam Workshop Downloader v5 ===")
-    print(f"  AppID: {args.appid}, WorkshopID: {args.workshopid}")
-    result = download(args.appid, args.workshopid, output, args.verbose, proxy)
-    if result:
-        total = sum(f.stat().st_size for f in result.rglob("*") if f.is_file())
-        cnt = sum(1 for f in result.rglob("*") if f.is_file())
-        print(f"\n  [v] {cnt} files, {total // 1024} KB -> {result}")
-    else:
-        print("\n  [x] Failed")
+    print(f"  AppID: {args.appid}, Workshop IDs: {', '.join(str(w) for w in args.workshopid)}")
+
+    client, cdn = _init_session(proxy)
+    if client is None:
+        print("\n  [x] Failed to initialize session")
+        sys.exit(1)
+
+    fails = 0
+    for wid in args.workshopid:
+        result = download_item(cdn, args.appid, wid, output, args.verbose)
+        if result is None:
+            fails += 1
+
+    try:
+        client.logout()
+    except:
+        pass
+
+    total = len(args.workshopid)
+    ok = total - fails
+    print(f"\n  [v] {ok}/{total} items downloaded")
+    if fails:
         sys.exit(1)
 
 

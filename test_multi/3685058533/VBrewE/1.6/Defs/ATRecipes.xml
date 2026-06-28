@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Defs>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Whiskey</defName>
+	<ingredientDefName>RawCorn</ingredientDefName>
+	<productDefName>VBE_Whiskey</productDefName>
+	<productCount>5</productCount>
+	<ingredientCount>25</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Tequila</defName>
+	<ingredientDefName>RawAgave</ingredientDefName>
+	<productDefName>VBE_Tequila</productDefName>
+	<productCount>5</productCount>
+	<ingredientCount>25</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Vodka</defName>
+	<ingredientDefName>RawPotatoes</ingredientDefName>
+	<productDefName>VBE_Vodka</productDefName>
+	<productCount>5</productCount>
+	<ingredientCount>25</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Gin</defName>
+	<ingredientDefName>RawBerries</ingredientDefName>
+	<productDefName>VBE_Gin</productDefName>
+	<productCount>5</productCount>
+	<ingredientCount>25</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+</Defs>

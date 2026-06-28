@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Defs>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Beer</defName>
+	<ingredientDefName>RawHops</ingredientDefName>
+	<productDefName>Beer</productDefName>
+	<productCount>5</productCount>
+	<ingredientCount>25</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_SmokeleafJoint</defName>
+	<ingredientDefName>SmokeleafLeaves</ingredientDefName>
+	<productDefName>SmokeleafJoint</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>4</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Tea</defName>
+	<ingredientDefName>PsychoidLeaves</ingredientDefName>
+	<productDefName>PsychiteTea</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>4</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Flake</defName>
+	<ingredientDefName>PsychoidLeaves</ingredientDefName>
+	<productDefName>Flake</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>4</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_Yayo</defName>
+	<ingredientDefName>PsychoidLeaves</ingredientDefName>
+	<productDefName>Yayo</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>8</ingredientCount>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_GoJuice</defName>
+	<ingredientDefName>PsychoidLeaves</ingredientDefName>
+	<productDefName>GoJuice</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>8</ingredientCount>
+	<show>false</show>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_SimpleMeal_Rice</defName>
+	<ingredientDefName>RawRice</ingredientDefName>
+	<productDefName>MealSimple</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>0.5</ingredientCount>
+	<ingredientGetter>IngredientValueGetter_Nutrition</ingredientGetter>
+</NicePlantsMenu.TrackingRecipeDef>
+
+<NicePlantsMenu.TrackingRecipeDef>
+	<defName>NPM_SimpleMeal_Potato</defName>
+	<ingredientDefName>RawPotatoes</ingredientDefName>
+	<productDefName>MealSimple</productDefName>
+	<productCount>1</productCount>
+	<ingredientCount>0.5</ingredientCount>
+	<ingredientGetter>IngredientValueGetter_Nutrition</ingredientGetter>
+</NicePlantsMenu.TrackingRecipeDef>
+
+</Defs>
