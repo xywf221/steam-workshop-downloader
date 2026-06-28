@@ -9,6 +9,7 @@ Uses ctypes to call steamclient64.dll for VSZa chunk decompression.
 Usage: pip install steam[client] pysocks
        python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...] [options]
        python workshop_download.py 294100 3683834622 3685058533
+       python workshop_download.py 294100 3047389309  (auto-expands collection)
 """
 
 import argparse
@@ -148,29 +149,37 @@ def _init_session(proxy: bool = True):
     from steam.client import SteamClient
     from steam.client.cdn import CDNClient
 
-    print("  [1/4] Connecting to Steam...")
+    print("Connecting to Steam...")
     client = SteamClient()
     if client.anonymous_login() != 1:
-        print("  [!] Login failed")
+        print("Login failed")
         return None, None
-    print(f"  [v] Logged on ({client.steam_id})")
+    print(f"  Logged on ({client.steam_id})")
 
-    print("  [2/4] Getting content servers...")
+    print("Getting content servers...")
     cdn = CDNClient(client)
-    print(f"  [v] Server: {cdn.get_content_server()}")
+    print(f"  Server: {cdn.get_content_server()}")
     return client, cdn
+
+
+def _fmt_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n / 1024 / 1024:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
 
 
 def download_item(cdn, app_id: int, workshop_id: int, output_dir: Path,
                   verbose: bool = False) -> Optional[Path]:
     """Download a single workshop item using an existing CDN session."""
-    print(f"\n  --- Workshop {workshop_id} ---")
-    print(f"  [3/4] Fetching manifest...")
+    print(f"=== {workshop_id} ===")
+    print(f"  Fetching manifest...")
     manifest = cdn.get_manifest_for_workshop_item(workshop_id)
     files = list(manifest.iter_files())
-    print(f"  [v] '{manifest.name}' - {len(files)} files")
+    print(f"  '{manifest.name}' - {len(files)} files")
 
-    print(f"  [4/4] Downloading files...")
+    print(f"  Downloading...")
     out_dir = output_dir / str(workshop_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -187,22 +196,64 @@ def download_item(cdn, app_id: int, workshop_id: int, output_dir: Path,
                 fp.write(data)
             ok += 1
             if verbose:
-                print(f"    [{i}/{len(files)}] {f.filename} ({len(data)} B)")
+                print(f"    {f.filename}  {_fmt_size(len(data))}")
         except Exception as e:
             fail += 1
             if verbose:
-                print(f"    [{i}/{len(files)}] {f.filename}: {e}")
+                print(f"    {f.filename}  FAIL: {e}")
         if not verbose and len(files) > 1:
-            print(f"\r    Progress: {i}/{len(files)}", end="", flush=True)
+            print(f"\r    {i}/{len(files)}", end="", flush=True)
 
     if not verbose:
         print()
-    print(f"  [v] {ok}/{len(files)} files")
 
     total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
     cnt = sum(1 for f in out_dir.rglob("*") if f.is_file())
-    print(f"  [v] {cnt} files, {total // 1024} KB -> {out_dir}")
+    print(f"  {_fmt_size(total)}  {cnt} files  ->  {out_dir}")
     return out_dir if ok > 0 else None
+
+
+def _resolve_ids(client, app_id: int, ids) -> list:
+    """
+    Check which IDs are collections (file_type == 2) and expand them.
+
+    Returns a flat list of individual workshop item IDs to download.
+    """
+    from steam.client import EResult
+
+    all_ids = list(dict.fromkeys(ids))
+    resolved = []
+
+    for start in range(0, len(all_ids), 100):
+        batch = all_ids[start:start + 100]
+        resp = client.send_um_and_wait('PublishedFile.GetDetails#1', {
+            'publishedfileids': batch,
+            'includetags': False,
+            'includeadditionalpreviews': False,
+            'includechildren': True,
+            'includekvtags': False,
+            'includevotes': False,
+            'short_description': True,
+            'includeforsaledata': False,
+            'includemetadata': False,
+            'language': 0
+        }, timeout=10)
+
+        for wf in resp.body.publishedfiledetails:
+            if wf.result != EResult.OK:
+                print(f"  Failed to get details for {wf.publishedfileid}, skipping")
+                continue
+
+            wid = wf.publishedfileid
+            title = wf.title or str(wid)
+            if wf.file_type == 2:  # Collection
+                child_ids = [c.publishedfileid for c in wf.children]
+                print(f"  '{title}' is a collection, {len(child_ids)} items")
+                resolved.extend(_resolve_ids(client, app_id, child_ids))
+            else:
+                resolved.append(wid)
+
+    return resolved
 
 
 def parse_args():
@@ -224,17 +275,26 @@ def main():
     proxy = not args.no_proxy
     output = Path(args.output).resolve()
     print(f"=== Steam Workshop Downloader v5 ===")
-    print(f"  AppID: {args.appid}, Workshop IDs: {', '.join(str(w) for w in args.workshopid)}")
+    print(f"  AppID: {args.appid}, IDs: {', '.join(str(w) for w in args.workshopid)}")
 
     client, cdn = _init_session(proxy)
     if client is None:
-        print("\n  [x] Failed to initialize session")
+        print("Failed to initialize session")
         sys.exit(1)
 
+    all_item_ids = _resolve_ids(client, args.appid, args.workshopid)
+    total = len(all_item_ids)
+
+    if total == 0:
+        print("No valid workshop items to download")
+        client.logout()
+        sys.exit(1)
+
+    print(f"\n{total} item{'s' if total > 1 else ''} to download")
+
     fails = 0
-    for wid in args.workshopid:
-        result = download_item(cdn, args.appid, wid, output, args.verbose)
-        if result is None:
+    for wid in all_item_ids:
+        if download_item(cdn, args.appid, wid, output, args.verbose) is None:
             fails += 1
 
     try:
@@ -242,11 +302,12 @@ def main():
     except:
         pass
 
-    total = len(args.workshopid)
     ok = total - fails
-    print(f"\n  [v] {ok}/{total} items downloaded")
     if fails:
+        print(f"\n{ok}/{total} downloaded, {fails} failed")
         sys.exit(1)
+    else:
+        print(f"\nAll {total} downloaded")
 
 
 if __name__ == "__main__":
