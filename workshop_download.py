@@ -4,7 +4,7 @@ Steam Workshop Offline Downloader v5
 =====================================
 Pure Python Steam Workshop downloader.
 Uses ValvePython/steam for Steam protocol.
-Uses ctypes to call steamclient64.dll for VSZa chunk decompression.
+All chunk decompression delegated to steamclient64.dll via ctypes.
 
 Usage: pip install steam[client] pysocks
        python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...] [options]
@@ -14,78 +14,121 @@ Usage: pip install steam[client] pysocks
 
 import argparse
 import ctypes
-import lzma
 import os
 import struct
 import sys
 from binascii import crc32
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
-from zipfile import ZipFile
 
 PROXY = "socks5://192.168.7.1:1070"
+
+# ctypes cache
 _DLL = None
-_DECOMPRESS_FN = None
+_DECOMPRESS_ALL = None  # sub_138CEAA90 (multi-format dispatcher)
+_PUT_FUNC = None       # CUtlBuffer.putFunc  (RVA 0xEB570, no-op)
+_GET_FUNC = None       # CUtlBuffer.getFunc  (RVA 0xD3F20)
+_MAX_CHUNK_SIZE = 100 * 1024 * 1024  # 100 MB safety limit
+
+
+class _CUtlBuffer(ctypes.Structure):
+    """Reversed from sub_138CD1DB0 (CUtlBuffer init).
+
+    Offset  Size  Field
+    0x00    8     data pointer
+    0x08    4     cbAllocated (m_nMaxReservedBytes)
+    0x0C    4     reserved (m_nReservedBytes)
+    0x10    4     tellGet (m_nOffset)
+    0x14    4     tellPut (m_nBytesWritten)  ← used as write position
+    0x18    4     flags (m_nAccessFlags)
+    0x1C    4     error (m_nError)
+    0x20    8     putFunc (m_pPutFunc)
+    0x28    8     getFunc (m_pGetFunc)
+    Total: 0x30 = 48 bytes
+    """
+    _fields_ = [
+        ("data", ctypes.c_void_p),
+        ("cbAllocated", ctypes.c_int),
+        ("reserved", ctypes.c_int),
+        ("tellGet", ctypes.c_int),
+        ("tellPut", ctypes.c_int),
+        ("flags", ctypes.c_int),
+        ("error", ctypes.c_int),
+        ("pad", ctypes.c_byte * 4),
+        ("putFunc", ctypes.c_void_p),
+        ("getFunc", ctypes.c_void_p),
+    ]
 
 
 def _load_dll():
-    """Load steamclient64.dll and cache VSZa decompression function."""
-    global _DLL, _DECOMPRESS_FN
-    if _DECOMPRESS_FN is not None:
+    """Load steamclient64.dll and resolve decompression functions."""
+    global _DLL, _DECOMPRESS_ALL, _PUT_FUNC, _GET_FUNC
+    if _DECOMPRESS_ALL is not None:
         return
     dll_path = Path(__file__).parent / "steamclient64.dll"
     if not dll_path.exists():
         raise RuntimeError(
             f"steamclient64.dll not found at {dll_path}. "
-            "Required for VSZa chunk decompression."
+            "Steamclient64.dll (from steamcmd install) is required "
+            "for VSZa chunk decompression."
         )
-    # Add DLL directory to search path so dependencies (tier0_s64.dll,
-    # vstdlib_s64.dll, etc.) can be found
     os.add_dll_directory(str(dll_path.parent))
     _DLL = ctypes.CDLL(str(dll_path))
-    # RVA of sub_138E86360 (Steam custom decompression)
-    fn_addr = _DLL._handle + 0xE86360
-    _DECOMPRESS_FN = ctypes.CFUNCTYPE(
-        ctypes.c_int,       # returned decompressed size
-        ctypes.c_void_p,    # output buffer
-        ctypes.c_int,       # expected decompressed size
-        ctypes.c_void_p,    # compressed input
-        ctypes.c_int        # compressed input size
-    )(fn_addr)
+
+    # sub_138CEAA90: multi-format chunk decompression dispatcher
+    #   signature: int __fastcall(data, size, CUtlBuffer*, max_size, out_format)
+    #   returns: 1=ok, 2=error, 25=buffer too small, 53=CRC mismatch
+    _DECOMPRESS_ALL = ctypes.CFUNCTYPE(
+        ctypes.c_int,       # return
+        ctypes.c_void_p,    # rcx: input data
+        ctypes.c_int,       # rdx: input size
+        ctypes.c_void_p,    # r8:  CUtlBuffer* (output)
+        ctypes.c_int,       # r9:  max output size
+        ctypes.c_void_p,    # stack: out_format (optional, can be None)
+    )(_DLL._handle + 0xCEAA90)
+
+    # CUtlBuffer function pointers (extracted from init function)
+    _PUT_FUNC = ctypes.c_void_p(_DLL._handle + 0xEB570)
+    _GET_FUNC = ctypes.c_void_p(_DLL._handle + 0xD3F20)
 
 
-def _vsza_decompress(data: bytes) -> bytes:
-    """
-    Decompress a VSZa-format chunk using steamclient64.dll.
-
-    Format (from IDA analysis):
-        [0:4]    "VSZa" magic
-        [4:8]    CRC32 of original data
-        [8:-15]  Compressed data (Steam custom algorithm)
-        [-15:-11] CRC32 again
-        [-11:-7]  Original size (low 32 bits)
-        [-7:-3]   Original size (high 32 bits)
-        [-3:]     "zsv" footer
-    """
+def _dll_decompress(data: bytes) -> bytes:
+    """Decompress a chunk (any format) using steamclient64.dll dispatcher."""
     _load_dll()
-    if data[:4] != b"VSZa" or data[-3:] != b"zsv":
-        raise ValueError("Not a valid VSZa chunk")
-    expected_size = struct.unpack("<I", data[-11:-7])[0]
-    expected_crc = struct.unpack("<I", data[-15:-11])[0]
-    compressed = data[8:-15]
 
-    output = ctypes.create_string_buffer(expected_size)
-    result = _DECOMPRESS_FN(output, expected_size, compressed, len(compressed))
+    # Pre-allocate output buffer
+    out_buf = ctypes.create_string_buffer(_MAX_CHUNK_SIZE)
 
-    if result != expected_size:
+    # Construct CUtlBuffer pointing at our output buffer
+    buf = _CUtlBuffer()
+    buf.data = ctypes.cast(out_buf, ctypes.c_void_p)
+    buf.cbAllocated = _MAX_CHUNK_SIZE
+    buf.reserved = 0
+    buf.tellGet = 0
+    buf.tellPut = 0
+    buf.flags = 0
+    buf.error = 0
+    buf.putFunc = _PUT_FUNC
+    buf.getFunc = _GET_FUNC
+
+    # Call the multi-format dispatcher
+    # It auto-detects format: VSZa, VZa, gzip, ZIP, raw LZMA
+    result = _DECOMPRESS_ALL(data, len(data), ctypes.byref(buf),
+                             _MAX_CHUNK_SIZE, None)
+
+    if result != 1:
         raise RuntimeError(
-            f"VSZa decompression failed: returned {result}, expected {expected_size}"
+            f"Decompression failed (format={data[:4].hex()}, "
+            f"returned={result})"
         )
-    decompressed = output.raw[:expected_size]
-    if crc32(decompressed) != expected_crc:
-        raise RuntimeError("VSZa CRC mismatch")
-    return decompressed
+
+    decompressed_size = buf.tellPut
+    if decompressed_size <= 0 or decompressed_size > _MAX_CHUNK_SIZE:
+        raise RuntimeError(
+            f"Decompression produced invalid size {decompressed_size}"
+        )
+
+    return out_buf.raw[:decompressed_size]
 
 
 def setup_proxy(proxy_url: str = PROXY):
@@ -97,7 +140,7 @@ def setup_proxy(proxy_url: str = PROXY):
 
 
 def patch_vsza():
-    """Monkey-patch CDNClient.get_chunk for VSZa/VZa format support."""
+    """Monkey-patch CDNClient.get_chunk to use DLL decompression."""
     from steam.client.cdn import CDNClient
     from steam.core.crypto import symmetric_decrypt
     from steam.exceptions import SteamError
@@ -106,34 +149,13 @@ def patch_vsza():
         key = (depot_id, chunk_id)
         if key not in self._chunk_cache:
             resp = self.cdn_cmd("depot", "%s/chunk/%s" % (depot_id, chunk_id))
-            data = symmetric_decrypt(resp.content, self.get_depot_key(app_id, depot_id))
-
-            if data[:4] == b"VSZa":  # New VSZa format
-                data = _vsza_decompress(data)
-
-            elif data[:2] == b"VZ":  # Original VZa format
-                if data[-2:] != b"zv":
-                    raise SteamError("VZ: Invalid footer")
-                if data[2:3] != b"a":
-                    raise SteamError("VZ: Invalid version")
-                lzma_filter = lzma._decode_filter_properties(
-                    lzma.FILTER_LZMA1, data[7:12])
-                checksum, dsz = struct.unpack("<II", data[-10:-2])
-                result = lzma.LZMADecompressor(
-                    lzma.FORMAT_RAW, filters=[lzma_filter]
-                ).decompress(data[12:-9])[:dsz]
-                if crc32(result) != checksum:
-                    raise SteamError("VZ: CRC mismatch")
-                data = result
-
-            elif data[:2] == b"\x1f\x8b":  # gzip
-                import zlib
-                data = zlib.decompress(data, 15 + 32)
-
-            else:
-                with ZipFile(BytesIO(data)) as zf:
-                    data = zf.read(zf.filelist[0])
-
+            encrypted = symmetric_decrypt(
+                resp.content, self.get_depot_key(app_id, depot_id)
+            )
+            try:
+                data = _dll_decompress(encrypted)
+            except Exception as e:
+                raise SteamError(f"DLL decompress: {e}") from e
             self._chunk_cache[key] = data
         return self._chunk_cache[key]
 
@@ -214,11 +236,7 @@ def download_item(cdn, app_id: int, workshop_id: int, output_dir: Path,
 
 
 def _resolve_ids(client, app_id: int, ids) -> list:
-    """
-    Check which IDs are collections (file_type == 2) and expand them.
-
-    Returns a flat list of individual workshop item IDs to download.
-    """
+    """Expand collections (file_type==2) into individual workshop IDs."""
     from steam.client import EResult
 
     all_ids = list(dict.fromkeys(ids))
