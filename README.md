@@ -42,21 +42,35 @@ python workshop_download.py 294100 3683834622 -v
 # Retry each failed file up to 10 times (default: 5)
 python workshop_download.py 294100 3683834622 --retries 10
 
-# Route outbound connections through a SOCKS5 proxy (default: direct connection)
+# Route outbound connections through a proxy (default: direct connection)
 python workshop_download.py 294100 3683834622 --proxy socks5://127.0.0.1:1080
+python workshop_download.py 294100 3683834622 --proxy http://user:pass@127.0.0.1:8080
 ```
 
 ## Proxy
 
 By default the downloader connects **directly** (no proxy). To route
-through a SOCKS5 proxy, pass `--proxy <URL>`:
+through a proxy, pass `--proxy <URL>`. The URL scheme selects the
+protocol:
+
+| Scheme                | Protocol         |
+|-----------------------|------------------|
+| `socks5://`, `socks5h://` (or bare `host:port`) | SOCKS5 |
+| `socks4://`           | SOCKS4           |
+| `http://`, `https://` | HTTP CONNECT     |
+
+For HTTP/HTTPS proxies, `user:password@` in the URL is sent as the
+proxy's basic auth.
 
 ```bash
+# SOCKS5
 python workshop_download.py 294100 3683834622 --proxy socks5://192.168.7.1:1070
+
+# HTTP CONNECT with basic auth
+python workshop_download.py 294100 3683834622 --proxy http://user:pass@proxy.example.com:8080
 ```
 
-The URL accepts `socks5://host:port`, `socks5h://host:port`, or bare
-`host:port`. If `--proxy` is omitted, the downloader goes out directly.
+If `--proxy` is omitted, the downloader goes out directly.
 
 ## How It Works
 

@@ -133,26 +133,64 @@ def _dll_decompress(data: bytes) -> bytes:
 
 
 def setup_proxy(proxy_url: str):
-    """Route all outbound sockets through a SOCKS5 proxy.
+    """Route all outbound sockets through a proxy.
 
-    ``proxy_url`` may use any of these schemes:
-      - socks5://host:port
-      - socks5h://host:port   (same as socks5 here; remote DNS not enforced)
-      - host:port            (bare host:port is treated as SOCKS5)
+    Protocol is selected by URL scheme:
+
+    - ``socks5://host:port``  / ``socks5h://host:port``  → SOCKS5
+    - ``socks4://host:port``                              → SOCKS4
+    - ``http://host:port``  / ``https://host:port``       → HTTP CONNECT
+    - bare ``host:port``                                  → SOCKS5 (default)
+
+    For HTTP/HTTPS proxies, ``user:password@`` in the URL is honoured
+    (passed as the ``Proxy-Authorization`` header by pysocks).
     """
     import socks, socket
-    cleaned = proxy_url.strip()
-    cleaned = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", "", cleaned)
-    if ":" not in cleaned:
+
+    raw = proxy_url.strip()
+    m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*)://(.*)$", raw)
+    if m:
+        scheme = m.group(1).lower()
+        rest = m.group(2)
+    else:
+        scheme = "socks5"
+        rest = raw
+
+    if scheme in ("socks5", "socks5h"):
+        proto = socks.SOCKS5
+    elif scheme == "socks4":
+        proto = socks.SOCKS4
+    elif scheme in ("http", "https"):
+        proto = socks.HTTP
+    else:
         raise ValueError(
-            f"Invalid proxy URL {proxy_url!r}: expected host:port (e.g. socks5://127.0.0.1:1080)"
+            f"Unsupported proxy scheme {scheme!r} in {proxy_url!r} "
+            "(expected socks5://, socks4://, or http(s)://)"
         )
-    host, port = cleaned.rsplit(":", 1)
+
+    # Split off optional userinfo (only meaningful for HTTP CONNECT).
+    user = None
+    password = None
+    if "@" in rest:
+        userinfo, rest = rest.rsplit("@", 1)
+        if ":" in userinfo:
+            user, password = userinfo.split(":", 1)
+        else:
+            user = userinfo
+
+    if ":" not in rest:
+        raise ValueError(
+            f"Invalid proxy URL {proxy_url!r}: expected host:port "
+            "(e.g. socks5://127.0.0.1:1080 or http://user:pass@proxy:8080)"
+        )
+    host, port = rest.rsplit(":", 1)
     try:
         port_num = int(port)
     except ValueError as e:
         raise ValueError(f"Invalid proxy port in {proxy_url!r}: {port!r}") from e
-    socks.set_default_proxy(socks.SOCKS5, host, port_num)
+
+    socks.set_default_proxy(proto, host, port_num, rdns=True,
+                            username=user, password=password)
     socket.socket = socks.socksocket
 
 
@@ -350,7 +388,10 @@ def parse_args():
     p.add_argument(
         "--proxy",
         metavar="URL",
-        help="SOCKS5 proxy URL, e.g. socks5://127.0.0.1:1080. "
+        help="Proxy URL. Scheme selects protocol: socks5:// or socks5h:// "
+             "(SOCKS5, default if scheme omitted), socks4:// (SOCKS4), "
+             "http:// or https:// (HTTP CONNECT). "
+             "Example: http://user:pass@127.0.0.1:8080. "
              "If omitted, no proxy is used (direct connection).",
     )
     p.add_argument("--retries", type=int, default=5,
