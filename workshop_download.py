@@ -10,18 +10,19 @@ Usage: pip install steam[client] pysocks
        python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...] [options]
        python workshop_download.py 294100 3683834622 3685058533
        python workshop_download.py 294100 3047389309  (auto-expands collection)
+       python workshop_download.py 294100 3683834622 --retries 10
 """
 
 import argparse
 import ctypes
 import os
+import re
 import struct
 import sys
+import time
 from binascii import crc32
 from pathlib import Path
 from typing import Optional
-
-PROXY = "socks5://192.168.7.1:1070"
 
 # ctypes cache
 _DLL = None
@@ -131,11 +132,27 @@ def _dll_decompress(data: bytes) -> bytes:
     return out_buf.raw[:decompressed_size]
 
 
-def setup_proxy(proxy_url: str = PROXY):
+def setup_proxy(proxy_url: str):
+    """Route all outbound sockets through a SOCKS5 proxy.
+
+    ``proxy_url`` may use any of these schemes:
+      - socks5://host:port
+      - socks5h://host:port   (same as socks5 here; remote DNS not enforced)
+      - host:port            (bare host:port is treated as SOCKS5)
+    """
     import socks, socket
-    p = proxy_url.replace("socks5://", "").replace("socks5h://", "")
-    h, port = p.split(":")
-    socks.set_default_proxy(socks.SOCKS5, h, int(port))
+    cleaned = proxy_url.strip()
+    cleaned = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", "", cleaned)
+    if ":" not in cleaned:
+        raise ValueError(
+            f"Invalid proxy URL {proxy_url!r}: expected host:port (e.g. socks5://127.0.0.1:1080)"
+        )
+    host, port = cleaned.rsplit(":", 1)
+    try:
+        port_num = int(port)
+    except ValueError as e:
+        raise ValueError(f"Invalid proxy port in {proxy_url!r}: {port!r}") from e
+    socks.set_default_proxy(socks.SOCKS5, host, port_num)
     socket.socket = socks.socksocket
 
 
@@ -162,10 +179,15 @@ def patch_vsza():
     CDNClient.get_chunk = vsza_get_chunk
 
 
-def _init_session(proxy: bool = True):
-    """Initialize Steam session (login + CDN)."""
-    if proxy:
-        setup_proxy()
+def _init_session(proxy_url: Optional[str] = None):
+    """Initialize Steam session (login + CDN).
+
+    If ``proxy_url`` is None (the default), no proxy is configured and
+    connections go out directly. Pass an explicit URL (e.g.
+    ``socks5://127.0.0.1:1080``) to route through a SOCKS5 proxy.
+    """
+    if proxy_url is not None:
+        setup_proxy(proxy_url)
     patch_vsza()
 
     from steam.client import SteamClient
@@ -193,8 +215,13 @@ def _fmt_size(n: int) -> str:
 
 
 def download_item(cdn, app_id: int, workshop_id: int, output_dir: Path,
-                  verbose: bool = False) -> Optional[Path]:
-    """Download a single workshop item using an existing CDN session."""
+                  verbose: bool = False, retries: int = 5) -> Optional[Path]:
+    """Download a single workshop item using an existing CDN session.
+
+    Each individual file is retried up to ``retries`` times on failure
+    (network errors, decompression errors, etc.) before being marked
+    as failed. A small backoff is applied between attempts.
+    """
     print(f"=== {workshop_id} ===")
     print(f"  Fetching manifest...")
     manifest = cdn.get_manifest_for_workshop_item(workshop_id)
@@ -212,25 +239,61 @@ def download_item(cdn, app_id: int, workshop_id: int, output_dir: Path,
             continue
         path = out_dir / f.filename
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            data = f.read()
-            with open(path, "wb") as fp:
-                fp.write(data)
-            ok += 1
-            if verbose:
-                print(f"    {f.filename}  {_fmt_size(len(data))}")
-        except Exception as e:
+
+        # Remove any partial file from a previous failed attempt so the
+        # final size check (below) reflects only completed downloads.
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+        success = False
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                data = f.read()
+                with open(path, "wb") as fp:
+                    fp.write(data)
+                ok += 1
+                success = True
+                if verbose:
+                    print(f"    {f.filename}  {_fmt_size(len(data))}")
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    # exponential-ish backoff: 1s, 2s, 4s, ...
+                    wait = min(2 ** (attempt - 1), 30)
+                    if verbose:
+                        print(f"    {f.filename}  FAIL (attempt {attempt}/{retries}): {e} — retrying in {wait}s")
+                    time.sleep(wait)
+                    # Re-fetch the manifest entry so any internal chunk cache
+                    # state from the failed attempt doesn't poison the next try.
+                    try:
+                        f = next(iter(manifest.iter_files()))
+                    except Exception:
+                        pass
+
+        if not success:
             fail += 1
             if verbose:
-                print(f"    {f.filename}  FAIL: {e}")
+                print(f"    {f.filename}  FAIL after {retries} attempts: {last_err}")
+            # Best-effort cleanup of any zero-byte stub we may have written.
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
         if not verbose and len(files) > 1:
             print(f"\r    {i}/{len(files)}", end="", flush=True)
 
     if not verbose:
         print()
 
-    total = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
-    cnt = sum(1 for f in out_dir.rglob("*") if f.is_file())
+    total = sum(p.stat().st_size for p in out_dir.rglob("*") if p.is_file())
+    cnt = sum(1 for p in out_dir.rglob("*") if p.is_file())
     print(f"  {_fmt_size(total)}  {cnt} files  ->  {out_dir}")
     return out_dir if ok > 0 else None
 
@@ -284,18 +347,30 @@ def parse_args():
                    help="one or more Workshop IDs to download")
     p.add_argument("-o", "--output", default=".")
     p.add_argument("-v", "--verbose", action="store_true")
-    p.add_argument("--no-proxy", action="store_true")
+    p.add_argument(
+        "--proxy",
+        metavar="URL",
+        help="SOCKS5 proxy URL, e.g. socks5://127.0.0.1:1080. "
+             "If omitted, no proxy is used (direct connection).",
+    )
+    p.add_argument("--retries", type=int, default=5,
+                   help="number of retry attempts for a failed file download (default: 5)")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
-    proxy = not args.no_proxy
+    # Default: no proxy. Pass --proxy <URL> to route through SOCKS5.
+    proxy_url = args.proxy
     output = Path(args.output).resolve()
     print(f"=== Steam Workshop Downloader v5 ===")
     print(f"  AppID: {args.appid}, IDs: {', '.join(str(w) for w in args.workshopid)}")
+    if proxy_url:
+        print(f"  Proxy: {proxy_url}")
+    else:
+        print(f"  Proxy: (direct connection)")
 
-    client, cdn = _init_session(proxy)
+    client, cdn = _init_session(proxy_url)
     if client is None:
         print("Failed to initialize session")
         sys.exit(1)
@@ -309,10 +384,12 @@ def main():
         sys.exit(1)
 
     print(f"\n{total} item{'s' if total > 1 else ''} to download")
+    print(f"  Retries per file: {args.retries}")
 
     fails = 0
     for wid in all_item_ids:
-        if download_item(cdn, args.appid, wid, output, args.verbose) is None:
+        if download_item(cdn, args.appid, wid, output, args.verbose,
+                         retries=args.retries) is None:
             fails += 1
 
     try:

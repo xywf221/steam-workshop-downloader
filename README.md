@@ -10,7 +10,7 @@ python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...]
 ## Features
 
 - **No SteamCMD dependency** — pure Python with ctypes for chunk decompression
-- **SOCKS5 proxy** support (configurable)
+- **SOCKS5 proxy** support (optional via `--proxy`, direct by default)
 - **Multiple Workshop IDs** per invocation — shared Steam session
 - **Collection expansion** — auto-detects and expands collections (`file_type == 2`)
 - **Multi-format support** — VSZa (ctypes DLL), VZa (pure LZMA), gzip, ZIP
@@ -39,19 +39,24 @@ python workshop_download.py 294100 3683834622 -o ./downloads
 # Verbose output (show each file as it downloads)
 python workshop_download.py 294100 3683834622 -v
 
-# Disable SOCKS5 proxy
-python workshop_download.py 294100 3683834622 --no-proxy
+# Retry each failed file up to 10 times (default: 5)
+python workshop_download.py 294100 3683834622 --retries 10
+
+# Route outbound connections through a SOCKS5 proxy (default: direct connection)
+python workshop_download.py 294100 3683834622 --proxy socks5://127.0.0.1:1080
 ```
 
 ## Proxy
 
-SOCKS5 proxy is configured at the top of the script:
+By default the downloader connects **directly** (no proxy). To route
+through a SOCKS5 proxy, pass `--proxy <URL>`:
 
-```python
-PROXY = "socks5://192.168.7.1:1070"
+```bash
+python workshop_download.py 294100 3683834622 --proxy socks5://192.168.7.1:1070
 ```
 
-To use a different proxy, edit the `PROXY` variable or use `--no-proxy` for direct connection.
+The URL accepts `socks5://host:port`, `socks5h://host:port`, or bare
+`host:port`. If `--proxy` is omitted, the downloader goes out directly.
 
 ## How It Works
 
