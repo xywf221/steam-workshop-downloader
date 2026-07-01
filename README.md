@@ -3,7 +3,7 @@
 Pure Python offline downloader for Steam Workshop items. No SteamCMD subprocess required.
 
 ```bash
-pip install steam[client] pysocks
+pip install steam[client] pysocks tqdm
 python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...]
 ```
 
@@ -18,7 +18,7 @@ python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...]
 ## Requirements
 
 - Python 3.8+
-- `pip install steam[client] pysocks`
+- `pip install steam[client] pysocks tqdm`
 - Windows (required for `steamclient64.dll` ctypes call)
 
 ## Usage
@@ -45,7 +45,49 @@ python workshop_download.py 294100 3683834622 --retries 10
 # Route outbound connections through a proxy (default: direct connection)
 python workshop_download.py 294100 3683834622 --proxy socks5://127.0.0.1:1080
 python workshop_download.py 294100 3683834622 --proxy http://user:pass@127.0.0.1:8080
+
+# Pipe-friendly output (no ANSI escapes)
+python workshop_download.py 294100 3683834622 --no-color > out.log 2>&1
+
+# Tee a copy of the run log to a file
+python workshop_download.py 294100 3683834622 --log-file run.log
 ```
+
+## What you'll see
+
+Every run prints progress to **stderr** (so piping stdout still works). On
+a TTY you get a nested `tqdm` bar: an outer "items" bar and an inner
+"files" bar, with stage prefixes, colored `OK`/`FAIL`/`retry` markers,
+and a final summary block:
+
+```
+[INIT] Connecting to Steam...
+OK  Logged on (anonymous)
+[INIT] Getting content servers...
+OK  Server: cdn-...
+OK  'Mod Pack' - 3 files
+
+=== Workshop 3683834622  (1/2) ===
+OK  'Foo Mod' - 12 files
+items   0%|          | 0/2 [00:00<?, ?item/s]
+files  25%|████████▌| 3/12
+-> retry: 1/5 on foo.bin: timeout (backoff 1s)
+files 100%|██████████| 12/12
+  45.3 MB  12 files (12 ok / 0 fail)  in 0:00:23  ->  ./3683834622
+
+=== Workshop 3685058533  (2/2) ===
+...
+--------------------------------------------------
+  Items:  2 total / 1 ok / 1 failed
+  Files:  18 total / 12 ok / 6 failed  (48.7 MB)
+  Duration: 0:01:23
+  Average:  4.2 MB/s
+--------------------------------------------------
+```
+
+When stderr is not a TTY (e.g. `> file.log` or `--no-color`), the tqdm
+bars are skipped and you get plain text lines instead — same information,
+no flicker.
 
 ## Proxy
 

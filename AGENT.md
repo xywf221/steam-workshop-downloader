@@ -7,50 +7,74 @@
 ## Architecture
 
 ```
-_init_session()          # SOCKS5 proxy + Steam anonymous login + CDNClient
+_init_session(proxy_url, log)        # proxy + Steam login + CDNClient; all output via Log
     ↓
-_resolve_ids()           # PublishedFile.GetDetails → detect collections (file_type==2)
-    ↓                     #   recurse into children, flatten to item ID list
-download_item()          # per-item:
+_resolve_ids(client, app_id, ids, log)  # PublishedFile.GetDetails → detect collections
+    ↓                                     #   recurse into children, flatten
+Progress(total_items, log)             # nested tqdm bars (items + files)
+    ↓
+download_item(cdn, app_id, wid, out_dir, progress, log)
     ├─ get_manifest_for_workshop_item()  # → CDNDepotManifest
     └─ for each file: f.read()
          └─ CDNClient.get_chunk()  # [PATCHED via patch_vsza()]
               ├─ HTTP GET depot/<id>/chunk/<sha>
               ├─ symmetric_decrypt (AES-256-CBC, depot key)
               └─ format detection → decompress
-                   ├─ VSZa → _vsza_decompress() → ctypes DLL call
-                   ├─ VZa  → lzma.FORMAT_RAW + custom properties
-                   ├─ gzip → zlib.decompress
-                   └─ ZIP  → ZipFile
+                   ├─ VSZa → _dll_decompress() → ctypes DLL call (RVA 0xCEAA90)
+                   ├─ VZa  → handled by the same DLL dispatcher
+                   ├─ gzip → handled by the same DLL dispatcher
+                   └─ ZIP  → handled by the same DLL dispatcher
 ```
 
 ## Key Functions
 
 | Function | Purpose |
 |----------|---------|
-| `_load_dll()` | Load `steamclient64.dll`, resolve RVA `0xE86360` via `ctypes.CFUNCTYPE` |
-| `_vsza_decompress(data)` | Parse VSZa header/footer, call DLL, verify CRC32 |
-| `patch_vsza()` | Monkey-patch `CDNClient.get_chunk` to add VSZa/VZa/gzip/ZIP handling |
-| `_resolve_ids(client, app_id, ids)` | Query Steam API to detect collections, flatten recursively |
-| `download_item(cdn, app_id, wid, out_dir)` | Download one item's files from manifest |
-| `_init_session(proxy)` | Login + CDN setup |
+| `_load_dll()` | Load `steamclient64.dll`, resolve RVA `0xCEAA90` (multi-format dispatcher) via `ctypes.CFUNCTYPE` |
+| `_dll_decompress(data)` | Call DLL dispatcher with a CUtlBuffer output; auto-detects VSZa / VZa / gzip / ZIP / raw LZMA |
+| `patch_vsza()` | Monkey-patch `CDNClient.get_chunk` to route all decompression through `_dll_decompress` |
+| `_resolve_ids(client, app_id, ids, log)` | Query Steam API to detect collections, flatten recursively; `log` is required |
+| `download_item(cdn, app_id, wid, out_dir, progress, log, verbose, retries)` | Download one item's files; returns `ItemStats` (None if no output dir) |
+| `_init_session(proxy_url, log)` | Login + CDN setup; `log` is required |
+| `Log` | Structured stderr output with `[STAGE]` prefix and ANSI color (auto-off when not a TTY) |
+| `Progress` | Two nested `tqdm` bars; bars are `None` when stderr is not a TTY |
+| `ItemStats` | Dataclass returned by `download_item` (out_dir, ok, fail, bytes_done, duration, name) |
 | `_fmt_size(n)` | Human-readable file size (B/KB/MB) |
+| `_fmt_duration(s)` | Human-readable duration (H:MM:SS) |
+
+## CLI flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `-o / --output` | `.` | Output directory |
+| `-v / --verbose` | off | Print one line per file (in addition to the bar) |
+| `--proxy URL` | none | Proxy URL — `socks5://`, `socks4://`, `http(s)://`; bare `host:port` defaults to SOCKS5 |
+| `--retries N` | 5 | Per-file retry count with exponential backoff |
+| `--color` / `--no-color` | auto | Force or disable ANSI color (auto = TTY detection) |
+| `--log-file PATH` | none | Tee all human output (ANSI stripped) to PATH |
+
+All progress and logging go to **stderr**; only the final summary line
+(`All items downloaded.` / `sys.exit(1)`) cares about exit code.
 
 ## VSZa Decompression (the ctypes trick)
 
 ```python
 dll = ctypes.CDLL("steamclient64.dll")
 DECOMPRESS_FN = ctypes.CFUNCTYPE(
-    ctypes.c_int,       # returned decompressed size
-    ctypes.c_void_p,    # output buffer
-    ctypes.c_int,       # expected size
-    ctypes.c_void_p,    # compressed input
-    ctypes.c_int        # compressed input size
-)(dll._handle + 0xE86360)  # RVA of sub_138E86360
+    ctypes.c_int,       # return code (1=ok, 2=err, 25=buf_too_small, 53=crc)
+    ctypes.c_void_p,    # rcx: input data
+    ctypes.c_int,       # rdx: input size
+    ctypes.c_void_p,    # r8:  CUtlBuffer* (output)
+    ctypes.c_int,       # r9:  max output size
+    ctypes.c_void_p,    # stack: out_format (optional)
+)(dll._handle + 0xCEAA90)  # RVA of sub_138CEAA90 (multi-format dispatcher)
 ```
 
-- **RVA `0xE86360`** is the VSZa decompression function (`sub_138E86360` from IDA)
-- Plain buffer-to-buffer API — no CUtlBuffer or Steam runtime structs needed
+- **RVA `0xCEAA90`** is the multi-format chunk decompression dispatcher
+  (`sub_138CEAA90` from IDA — supersedes the older `0xE86360` VSZa-only call)
+- The dispatcher auto-detects VSZa / VZa / gzip / ZIP / raw LZMA from the
+  first few bytes of the input; callers no longer need to dispatch themselves.
+- Output goes through a CUtlBuffer (48-byte struct, see `_CUtlBuffer`).
 - DLL dependencies (`tier0_s64.dll`, `vstdlib_s64.dll`) must be in the search path
 - `os.add_dll_directory()` is called before `ctypes.CDLL()`
 
@@ -108,7 +132,7 @@ All three are tracked via Git LFS (`*.dll filter=lfs diff=lfs merge=lfs -text`).
 ## Related Files
 
 - `IDA_REVERSE_SUMMARY.md` — Full IDA analysis document (Chinese)
-- `workshop_download.py` — Main script (314 lines)
+- `workshop_download.py` — Main script (single-file, ~570 lines)
 
 ## Steam API Endpoint Used
 
