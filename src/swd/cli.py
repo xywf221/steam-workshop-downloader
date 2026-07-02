@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 from swd.constants import APP_NAME, DEFAULT_OUTPUT, DEFAULT_RETRIES, VERSION
 from swd.dll import enable_vt_on_windows

@@ -10,6 +10,7 @@ Two layers:
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -112,11 +113,50 @@ def parse_proxy_url(url: str) -> ParsedProxy:
     )
 
 
+def _make_getaddrinfo_wrapper(
+    original: Callable[..., list[tuple]],
+) -> Callable[..., list[tuple]]:
+    """Wrap ``socket.getaddrinfo`` to fall back to ``gethostbyname`` when
+    ``getaddrinfo`` fails (known issue on some networks, e.g. IPv6 dual-stack
+    misconfiguration).
+
+    This is needed because ``steam[client]`` uses ``socket.getaddrinfo`` for
+    CM server discovery, and on some networks it returns error 10044 for
+    ``cm0.steampowered.com`` even though ``gethostbyname`` resolves fine.
+    """
+    import socket as _socket
+
+    def getaddrinfo(
+        host: str,
+        port: int,
+        family: int = 0,
+        socktype: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[tuple]:
+        try:
+            return original(host, port, family, socktype, proto, flags)
+        except OSError:
+            # Fallback: resolve via gethostbyname (IPv4 only), then
+            # construct a getaddrinfo-style result list.
+            ip = _socket.gethostbyname(host)
+            if family == 0:
+                family = _socket.AF_INET
+            if socktype == 0:
+                socktype = _socket.SOCK_STREAM
+            if proto == 0:
+                proto = _socket.IPPROTO_TCP
+            return [(family, socktype, proto, "", (ip, port))]
+
+    return getaddrinfo
+
+
 def setup_proxy(url: str) -> ParsedProxy:
     """Parse ``url`` and configure ``pysocks`` as the default proxy.
 
-    Mutates ``socket.socket`` globally. Idempotent — calling twice just
-    reconfigures. Returns the :class:`ParsedProxy` for inspection / tests.
+    Mutates ``socket.socket`` and ``socket.getaddrinfo`` globally.
+    Idempotent — calling twice just reconfigures. Returns the
+    :class:`ParsedProxy` for inspection / tests.
     """
     import socket
 
@@ -132,6 +172,12 @@ def setup_proxy(url: str) -> ParsedProxy:
         password=parsed.password,
     )
     socket.socket = socks.socksocket  # type: ignore[misc]
+
+    # Patch getaddrinfo to fall back to gethostbyname on failure.
+    # This works around networks where getaddrinfo returns error 10044
+    # for Steam domains even though the host is resolvable.
+    _orig_getaddrinfo = socket.getaddrinfo
+    socket.getaddrinfo = _make_getaddrinfo_wrapper(_orig_getaddrinfo)
     return parsed
 
 

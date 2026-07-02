@@ -86,6 +86,7 @@ def test_setup_proxy_uses_pysocks(monkeypatch) -> None:
         if name == "socket":
             mod = type(__import__("types"))("socket")
             mod.socket = FakeSocks.socksocket
+            mod.getaddrinfo = lambda *a, **k: [(2, 1, 6, "", ("127.0.0.1", 80))]
             return mod
         return orig_import(name, *a, **k)
 
