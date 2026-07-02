@@ -2,3 +2,19 @@ __pycache__/
 *.pyc
 test_*/
 test_output/
+
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Test / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

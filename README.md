@@ -1,57 +1,91 @@
 # Steam Workshop Downloader
 
-Pure Python offline downloader for Steam Workshop items. No SteamCMD subprocess required.
+Pure-Python offline downloader for Steam Workshop items. No `steamcmd`
+subprocess — talks the Steam protocol directly via [`steam`][steam-pypi]
+and uses `ctypes` against `steamclient64.dll` for chunk decompression.
 
 ```bash
-pip install steam[client] pysocks tqdm
-python workshop_download.py <AppID> <WorkshopID> [<WorkshopID>...]
+pip install swd
+swd 294100 3683834622
 ```
+
+> Package name on PyPI: `swd`. Console command: `swd`. Importable as
+> `import swd`. (Internal package name reflects the project alias while
+> leaving the GitHub repo untouched.)
+
+[steam-pypi]: https://pypi.org/project/steam/
 
 ## Features
 
-- **No SteamCMD dependency** — pure Python with ctypes for chunk decompression
-- **SOCKS5 proxy** support (optional via `--proxy`, direct by default)
-- **Multiple Workshop IDs** per invocation — shared Steam session
+- **No SteamCMD** — pure Python with ctypes for chunk decompression
+- **Pluggable proxy** — `socks5://`, `socks4://`, or `http(s)://` CONNECT, via `pysocks`
+- **Multiple Workshop IDs** per invocation — shared Steam session, batch progress
 - **Collection expansion** — auto-detects and expands collections (`file_type == 2`)
-- **Multi-format support** — VSZa (ctypes DLL), VZa (pure LZMA), gzip, ZIP
+- **Multi-format decompression** — VSZa, VZa, gzip, ZIP, raw LZMA, all dispatched by `steamclient64.dll`
+- **Real progress bars** — nested `tqdm` bars (items × files) with ETA + speed
+- **Structured logging** — stage-prefixed, ANSI-coloured, file-teeable
+- **Per-file retry** — exponential backoff, configurable count
+- **Installable as a package** — `pip install`, console script, real entry points
+- **Tested & linted in CI** — ruff + mypy + pytest matrix on Linux and Windows
 
 ## Requirements
 
-- Python 3.8+
-- `pip install steam[client] pysocks tqdm`
-- Windows (required for `steamclient64.dll` ctypes call)
+- Python **3.10+**
+- `pip install swd` pulls in the runtime deps (`steam[client]`, `PySocks`, `tqdm`)
+- **Windows** is required at runtime — `steamclient64.dll` is loaded via ctypes
+
+The Windows DLLs (`steamclient64.dll`, `tier0_s64.dll`, `vstdlib_s64.dll`) come
+from a `steamcmd` install. Place `steamclient64.dll` next to `pyproject.toml`
+(the repository root when developing). Tests mock the DLL, so CI does not need
+it.
+
+## Installation
+
+```bash
+pip install swd
+```
+
+Or, for development:
+
+```bash
+git clone https://github.com/xywf221/steam-workshop-downloader
+cd steam-workshop-downloader
+pip install -e ".[dev]"
+```
 
 ## Usage
 
 ```bash
 # Single item
-python workshop_download.py 294100 3683834622
+swd 294100 3683834622
 
 # Multiple items (shared Steam session)
-python workshop_download.py 294100 3683834622 3685058533
+swd 294100 3683834622 3685058533
 
 # Collection — auto-expands to all child items
-python workshop_download.py 294100 3047389309
+swd 294100 3047389309
 
 # Custom output directory
-python workshop_download.py 294100 3683834622 -o ./downloads
+swd 294100 3683834622 -o ./downloads
 
-# Verbose output (show each file as it downloads)
-python workshop_download.py 294100 3683834622 -v
+# Verbose output (per-file lines under the bar)
+swd 294100 3683834622 -v
 
 # Retry each failed file up to 10 times (default: 5)
-python workshop_download.py 294100 3683834622 --retries 10
+swd 294100 3683834622 --retries 10
 
-# Route outbound connections through a proxy (default: direct connection)
-python workshop_download.py 294100 3683834622 --proxy socks5://127.0.0.1:1080
-python workshop_download.py 294100 3683834622 --proxy http://user:pass@127.0.0.1:8080
+# Route outbound connections through a proxy (default: direct)
+swd 294100 3683834622 --proxy socks5://127.0.0.1:1080
+swd 294100 3683834622 --proxy http://user:pass@proxy:8080
 
-# Pipe-friendly output (no ANSI escapes)
-python workshop_download.py 294100 3683834622 --no-color > out.log 2>&1
+# Pipe-friendly output (no ANSI)
+swd 294100 3683834622 --no-color > out.log 2>&1
 
 # Tee a copy of the run log to a file
-python workshop_download.py 294100 3683834622 --log-file run.log
+swd 294100 3683834622 --log-file run.log
 ```
+
+`swd --help` lists every flag.
 
 ## What you'll see
 
@@ -65,7 +99,6 @@ and a final summary block:
 OK  Logged on (anonymous)
 [INIT] Getting content servers...
 OK  Server: cdn-...
-OK  'Mod Pack' - 3 files
 
 === Workshop 3683834622  (1/2) ===
 OK  'Foo Mod' - 12 files
@@ -85,9 +118,9 @@ files 100%|██████████| 12/12
 --------------------------------------------------
 ```
 
-When stderr is not a TTY (e.g. `> file.log` or `--no-color`), the tqdm
-bars are skipped and you get plain text lines instead — same information,
-no flicker.
+When stderr is not a TTY (e.g. `> file.log` or `--no-color`), the tqdm bars
+are skipped and you get plain text lines instead — same information, no
+flicker.
 
 ## Proxy
 
@@ -95,24 +128,79 @@ By default the downloader connects **directly** (no proxy). To route
 through a proxy, pass `--proxy <URL>`. The URL scheme selects the
 protocol:
 
-| Scheme                | Protocol         |
-|-----------------------|------------------|
-| `socks5://`, `socks5h://` (or bare `host:port`) | SOCKS5 |
-| `socks4://`           | SOCKS4           |
-| `http://`, `https://` | HTTP CONNECT     |
+| Scheme                                   | Protocol         |
+|------------------------------------------|------------------|
+| `socks5://`, `socks5h://` (or bare `host:port`) | SOCKS5          |
+| `socks4://`                              | SOCKS4           |
+| `http://`, `https://`                    | HTTP CONNECT     |
 
-For HTTP/HTTPS proxies, `user:password@` in the URL is sent as the
-proxy's basic auth.
+For HTTP/HTTPS proxies, `user:password@` in the URL is sent as basic auth.
 
-```bash
-# SOCKS5
-python workshop_download.py 294100 3683834622 --proxy socks5://192.168.7.1:1070
+## Project layout
 
-# HTTP CONNECT with basic auth
-python workshop_download.py 294100 3683834622 --proxy http://user:pass@proxy.example.com:8080
+```
+steam-workshop-downloader/
+├── pyproject.toml
+├── README.md
+├── AGENT.md
+├── LICENSE
+├── steamclient64.dll        # required at runtime (Windows)
+├── src/swd/
+│   ├── __init__.py
+│   ├── __main__.py          # python -m swd
+│   ├── cli.py               # argparse + cmd_swd() entry point
+│   ├── constants.py         # RVA numbers, batch sizes, defaults
+│   ├── utils.py             # fmt_size, fmt_duration, compute_backoff
+│   ├── dll/
+│   │   ├── buffer.py        # CUtlBuffer struct + enable_vt_on_windows
+│   │   └── loader.py        # load_dll, decompress
+│   ├── steam/
+│   │   ├── proxy.py         # parse_proxy_url, setup_proxy
+│   │   ├── patch.py         # patch_cdn_client_get_chunk
+│   │   ├── session.py       # init_session
+│   │   └── workshop.py      # resolve_ids (collection expansion)
+│   ├── download/
+│   │   └── item.py          # download_item, ItemStats
+│   └── ui/
+│       ├── log.py           # Colors, Log
+│       └── progress.py      # Progress, ItemStats
+└── tests/
+    ├── conftest.py
+    ├── test_utils.py
+    ├── test_log.py
+    ├── test_progress.py
+    ├── test_proxy.py
+    ├── test_dll_smoke.py
+    ├── test_download_item.py
+    └── test_cli.py
 ```
 
-If `--proxy` is omitted, the downloader goes out directly.
+Module dependency direction is strictly one-way:
+
+```
+cli → download → steam → valve-python/steam
+              ↘
+               dll → ctypes
+              ↗
+ui ←────────────┘  (used by download + cli, never imports them)
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+ruff check src tests
+mypy src
+```
+
+CI runs on every push and pull request:
+
+- `ubuntu-latest` + `windows-latest`
+- Python 3.10, 3.11, 3.12, 3.13
+- ruff, mypy, pytest with coverage
+
+See `.github/workflows/ci.yml` for the matrix.
 
 ## How It Works
 
@@ -128,37 +216,23 @@ CDN Manifest Download (file list + chunk references)
 For each chunk:
   HTTP GET from CDN
   AES-256-CBC decrypt (depot key)
-  Format detection → decompress
+  Format detection → decompress (via steamclient64.dll)
         ↓
 Files written to disk
 ```
 
 ### Chunk Compression Formats
 
-The decompression dispatcher (reversed from `steamclient64.dll`) handles 5 formats:
+The decompression dispatcher (reversed from `steamclient64.dll` at RVA
+`0xCEAA90`) auto-detects and handles 5 formats:
 
-| Magic | Format | Decompression |
-|-------|--------|--------------|
-| `VSZa` | Steam custom (new) | `ctypes` → `steamclient64.dll` RVA `0xE86360` |
-| `VZa` | LZMA custom props | Pure Python `lzma.FORMAT_RAW` |
-| `1F 8B` | gzip | `zlib.decompress` |
-| `PK 03 04` | ZIP (single-file) | `zipfile.ZipFile` |
-| raw LZMA | LZMA standard | `lzma` library |
-
-## Files
-
-```
-steam-workshop-downloader/
-├── workshop_download.py    Main downloader script
-├── steamclient64.dll       Steam client DLL (for VSZa decompression, 25 MB)
-├── tier0_s64.dll           DLL dependency
-├── vstdlib_s64.dll         DLL dependency
-├── IDA_REVERSE_SUMMARY.md  Full reverse engineering documentation (Chinese)
-├── README.md               This file
-├── AGENT.md                AI agent context / codebase map
-├── .gitattributes          Git LFS config for *.dll
-└── .gitignore
-```
+| Magic     | Format             | Decompression                       |
+|-----------|--------------------|-------------------------------------|
+| `VSZa`    | Steam custom (new) | `ctypes` → `steamclient64.dll`      |
+| `VZa`     | LZMA custom props  | Same dispatcher                     |
+| `1F 8B`   | gzip               | Same dispatcher                     |
+| `PK 03 04`| ZIP (single-file)  | Same dispatcher                     |
+| raw LZMA  | LZMA standard      | Same dispatcher                     |
 
 ## Reverse Engineering
 
@@ -171,4 +245,4 @@ See [IDA_REVERSE_SUMMARY.md](IDA_REVERSE_SUMMARY.md) for a complete walkthrough 
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
