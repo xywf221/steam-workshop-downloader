@@ -24,6 +24,7 @@ swd 294100 3683834622
 - **Multi-format decompression** — VSZa, VZa, gzip, ZIP, raw LZMA, all dispatched by `steamclient64.dll`
 - **Real progress bars** — nested `tqdm` bars (items × files) with ETA + speed
 - **Structured logging** — stage-prefixed, ANSI-coloured, file-teeable
+- **Skip if unchanged** — local files matching depot SHA-1 are not re-downloaded
 - **Per-file retry** — exponential backoff, configurable count
 - **Installable as a package** — `pip install`, console script, real entry points
 - **Tested & linted in CI** — ruff + mypy + pytest matrix on Linux and Windows
@@ -87,6 +88,50 @@ swd 294100 3683834622 --log-file run.log
 
 `swd --help` lists every flag.
 
+## Web UI (optional)
+
+Browse and search a game's Workshop in the browser (anonymous Steam session, no API key). Download still uses the CLI.
+
+```bash
+pip install "swd[web]"
+swd-web --host 127.0.0.1 --port 8765 -o ./downloads
+# open http://127.0.0.1:8765/?appid=294100
+# JSON: GET /api/workshop?appid=294100&q=combat&page=1
+# Queue a download: POST /api/downloads  {"appid":294100,"workshopid":123}
+```
+
+Optional flags:
+
+- `-o / --output DIR` — directory for web-triggered downloads (default: `.`)
+- `--proxy URL` — same schemes as `swd --proxy`
+- `--debug` — Flask debug reloader
+
+When `--proxy` is set, Workshop **preview images** are rewritten to
+`/media/image?u=...` so the browser loads them through the server (which uses
+the same proxy). Without `--proxy`, images still load directly from Steam CDNs.
+
+| Route | Purpose |
+|-------|---------|
+| `/` | HTML: AppID + search + sort + pagination (+ per-card download) |
+| `/item/<id>` | HTML item detail (+ Download button) |
+| `/downloads` | Download queue + live progress |
+| `/media/image?u=<url>` | Proxy Steam preview images (SSRF-limited hosts) |
+| `/api/health` | `{ok, steam_logged_on, proxy, downloads, output_dir}` |
+| `/api/workshop?appid=&q=&page=&per_page=&sort=&cursor=` | JSON list (use `next_cursor` for page 2+) |
+| `/api/workshop/<id>` | JSON detail |
+| `POST /api/downloads` | Queue download `{appid, workshopid, title?}` → `202` |
+| `GET /api/downloads` | List jobs + counts |
+| `GET /api/downloads/<job_id>` | One job progress |
+
+Sort values: `trend` (default), `votes`, `subscriptions`, `new`, `search` (auto when `q` is set).
+
+Pagination uses Steam **cursors** (`cursor` / `next_cursor`), not deep `page=N`
+walks — the latter often times out over a proxy. List/detail responses are
+cached briefly in-process so back/forward and opening a card stay fast.
+
+Downloads run one-at-a-time on the Steam worker thread into `-o` (collections
+are expanded first). Open **Downloads** in the header to watch progress.
+
 ## What you'll see
 
 Every run prints progress to **stderr** (so piping stdout still works). On
@@ -125,8 +170,20 @@ flicker.
 ## Proxy
 
 By default the downloader connects **directly** (no proxy). To route
-through a proxy, pass `--proxy <URL>`. The URL scheme selects the
-protocol:
+through a proxy, pass `--proxy <URL>` (same for `swd` and `swd-web`). The
+URL scheme selects the protocol. Traffic covered:
+
+| Path | How proxy is applied |
+|------|----------------------|
+| Steam CM (login, `QueryFiles`, `GetDetails`) | PySocks via patched `TCPConnection` (gevent-safe) |
+| CDN chunk HTTP | stdlib / requests through `socket.socket = socksocket` |
+| Web preview images (`swd-web`) | server-side `/media/image` fetch |
+
+> **Note:** only patching stdlib `socket` is **not** enough for CM — ValvePython
+> uses `gevent.socket`, which bypasses that assignment. `swd` patches CM TCP
+> explicitly when `--proxy` is set.
+
+The URL scheme selects the protocol:
 
 | Scheme                                   | Protocol         |
 |------------------------------------------|------------------|
@@ -161,9 +218,15 @@ steam-workshop-downloader/
 │   │   └── workshop.py      # resolve_ids (collection expansion)
 │   ├── download/
 │   │   └── item.py          # download_item, ItemStats
-│   └── ui/
-│       ├── log.py           # Colors, Log
-│       └── progress.py      # Progress, ItemStats
+│   ├── ui/
+│   │   ├── log.py           # Colors, Log
+│   │   └── progress.py      # Progress, ItemStats
+│   └── web/                 # optional Flask UI (swd[web])
+│       ├── app.py           # create_app + routes
+│       ├── session.py       # SteamSession holder
+│       ├── cli.py           # swd-web entry
+│       ├── templates/       # Jinja2 HTML
+│       └── static/          # CSS
 └── tests/
     ├── conftest.py
     ├── test_utils.py
@@ -178,11 +241,10 @@ steam-workshop-downloader/
 Module dependency direction is strictly one-way:
 
 ```
-cli → download → steam → valve-python/steam
-              ↘
-               dll → ctypes
-              ↗
-ui ←────────────┘  (used by download + cli, never imports them)
+cli  →  download  →  steam  →  valve-python/steam
+web  ─────────────↗     ↘
+                         dll → ctypes
+ui  ←───────────────────┘  (used by download + cli + web; never imports them)
 ```
 
 ## Development

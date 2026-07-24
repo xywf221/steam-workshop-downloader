@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Downloads — SWD{% endblock %}
+{% block content %}
+<section class="downloads-panel">
+  <div class="downloads-head">
+    <h1>Downloads</h1>
+    <p class="hint">Output: <code>{{ download_output }}</code>
+      · queued {{ counts.queued or 0 }}
+      · running {{ counts.running or 0 }}
+      · done {{ counts.done or 0 }}
+      · failed {{ counts.failed or 0 }}
+    </p>
+  </div>
+
+  <div id="jobs" class="job-list">
+    {% if not jobs %}
+    <p class="empty" id="empty-msg">No downloads yet. Open an item and click Download.</p>
+    {% endif %}
+    {% for job in jobs %}
+    <article class="job-card status-{{ job.status }}" data-id="{{ job.id }}">
+      <div class="job-top">
+        <strong class="job-title">{{ job.title }}</strong>
+        <span class="job-status">{{ job.status }}</span>
+      </div>
+      <div class="job-meta">
+        <span>app {{ job.app_id }}</span>
+        <span>id {{ job.workshop_id }}</span>
+        <span class="job-path">{{ job.out_dir }}</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width: {{ job.percent }}%"></div></div>
+      <div class="job-stats">
+        <span class="job-pct">{{ job.percent }}%</span>
+        <span class="job-files">{{ job.files_done }}/{{ job.files_total }} files</span>
+        <span class="job-bytes">{{ job.bytes_done_human }}</span>
+        <span class="job-msg">{{ job.message }}</span>
+      </div>
+      {% if job.error %}<p class="job-error">{{ job.error }}</p>{% endif %}
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const root = document.getElementById("jobs");
+  if (!root) return;
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderJob(job) {
+    return (
+      '<article class="job-card status-' + esc(job.status) + '" data-id="' + esc(job.id) + '">' +
+        '<div class="job-top">' +
+          '<strong class="job-title">' + esc(job.title) + '</strong>' +
+          '<span class="job-status">' + esc(job.status) + '</span>' +
+        '</div>' +
+        '<div class="job-meta">' +
+          '<span>app ' + esc(job.app_id) + '</span>' +
+          '<span>id ' + esc(job.workshop_id) + '</span>' +
+          '<span class="job-path">' + esc(job.out_dir) + '</span>' +
+        '</div>' +
+        '<div class="progress-bar"><div class="progress-fill" style="width: ' + (job.percent || 0) + '%"></div></div>' +
+        '<div class="job-stats">' +
+          '<span class="job-pct">' + (job.percent || 0) + '%</span>' +
+          '<span class="job-files">' + (job.files_done || 0) + '/' + (job.files_total || 0) + ' files</span>' +
+          '<span class="job-bytes">' + esc(job.bytes_done_human || '0 B') + '</span>' +
+          '<span class="job-msg">' + esc(job.message || '') + '</span>' +
+        '</div>' +
+        (job.error ? '<p class="job-error">' + esc(job.error) + '</p>' : '') +
+      '</article>'
+    );
+  }
+
+  async function refresh() {
+    try {
+      const resp = await fetch("{{ url_for('api_downloads_list') }}");
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const jobs = data.jobs || [];
+      if (!jobs.length) {
+        root.innerHTML = '<p class="empty" id="empty-msg">No downloads yet. Open an item and click Download.</p>';
+      } else {
+        root.innerHTML = jobs.map(renderJob).join("");
+      }
+      const hint = document.querySelector(".downloads-head .hint");
+      if (hint && data.counts) {
+        const c = data.counts;
+        hint.innerHTML =
+          "Output: <code>" + esc(data.output_dir || "") + "</code>" +
+          " · queued " + (c.queued || 0) +
+          " · running " + (c.running || 0) +
+          " · done " + (c.done || 0) +
+          " · failed " + (c.failed || 0);
+      }
+    } catch (e) {
+      /* ignore transient poll errors */
+    }
+  }
+
+  setInterval(refresh, 1500);
+})();
+</script>
+{% endblock %}

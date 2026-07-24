@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
 from pathlib import Path
 
 
@@ -55,6 +56,8 @@ class Log:
         self._fp = (
             open(log_file, "a", encoding="utf-8") if log_file else None  # noqa: SIM115
         )
+        # Multi-file workers may emit retry/fail lines concurrently.
+        self._lock = threading.Lock()
 
     @classmethod
     def create(cls, *, use_color: bool = True, log_file: Path | None = None) -> Log:
@@ -63,11 +66,12 @@ class Log:
         return cls(use_color=effective_color, log_file=log_file)
 
     def _emit(self, line: str) -> None:
-        sys.stderr.write(line + "\n")
-        sys.stderr.flush()
-        if self._fp is not None:
-            self._fp.write(strip_ansi(line) + "\n")
-            self._fp.flush()
+        with self._lock:
+            sys.stderr.write(line + "\n")
+            sys.stderr.flush()
+            if self._fp is not None:
+                self._fp.write(strip_ansi(line) + "\n")
+                self._fp.flush()
 
     def stage(self, stage: str, msg: str) -> None:
         self._emit(f"{self._c.CYAN}[{stage}]{self._r} {msg}")

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}
+  {% if item %}{{ item.title }} — SWD{% else %}Item {{ item_id }} — SWD{% endif %}
+{% endblock %}
+{% block content %}
+<p class="back"><a href="javascript:history.back()">← Back</a> · <a href="{{ url_for('index') }}">Home</a></p>
+
+{% if error %}
+  <div class="alert error">{{ error }}</div>
+{% endif %}
+
+{% if item %}
+<article class="detail">
+  <div class="detail-preview">
+    {% if item.preview_src %}
+    <img src="{{ item.preview_src }}" alt="" referrerpolicy="no-referrer">
+    {% else %}
+    <div class="preview-placeholder large">No preview</div>
+    {% endif %}
+  </div>
+  <div class="detail-body">
+    <h1>{{ item.title }}</h1>
+    <p class="meta">
+      ID <code>{{ item.id }}</code>
+      {% if item.is_collection %} · <span class="badge">Collection</span>{% endif %}
+      {% if item.banned %} · <span class="badge bad">Banned</span>{% endif %}
+    </p>
+    <div class="stats-row">
+      <span>↓ {{ item.subscriptions }} subs</span>
+      <span>★ {{ item.favorited }} favs</span>
+      <span>👁 {{ item.views }} views</span>
+      {% if item.file_size_human %}<span>{{ item.file_size_human }}</span>{% endif %}
+      {% if item.vote_score is not none %}<span>score {{ '%.2f'|format(item.vote_score) }}</span>{% endif %}
+    </div>
+    {% if item.tags %}
+    <div class="tags">
+      {% for t in item.tags %}<span class="tag">{{ t }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if item.short_description %}
+    <div class="description">{{ item.short_description }}</div>
+    {% endif %}
+    <div class="actions">
+      {% if download_enabled %}
+      <button
+        type="button"
+        class="btn"
+        id="btn-download"
+        data-appid="{{ item.consumer_appid or request.args.get('appid', '') }}"
+        data-id="{{ item.id }}"
+        data-title="{{ item.title|e }}"
+      >用 SWD 下载到本机</button>
+      <a class="btn btn-ghost" href="{{ url_for('downloads_page') }}">查看下载进度</a>
+      {% else %}
+      <p class="hint">启动时加 <code>-o ./downloads</code> 可启用本机下载。</p>
+      {% endif %}
+      <a class="btn btn-ghost" href="{{ item.steam_url }}" target="_blank" rel="noopener">Steam 页面</a>
+    </div>
+    <div id="dl-status" class="dl-status" hidden></div>
+    {% if download_enabled %}
+    <p class="hint">点击上方按钮会调用本机 <code>swd</code> 下载逻辑（CDN + hash 跳过），保存到
+      <code>{{ download_output }}</code>，不是打开 Steam 客户端。</p>
+    {% endif %}
+  </div>
+</article>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if download_enabled and item %}
+<script>
+(function () {
+  const btn = document.getElementById("btn-download");
+  const status = document.getElementById("dl-status");
+  if (!btn || !status) return;
+
+  function setStatus(html, cls) {
+    status.hidden = false;
+    status.className = "dl-status" + (cls ? " " + cls : "");
+    status.innerHTML = html;
+  }
+
+  btn.addEventListener("click", async function () {
+    let appid = parseInt(btn.dataset.appid || "0", 10);
+    if (!appid) {
+      const q = new URLSearchParams(location.search).get("appid");
+      appid = parseInt(q || "0", 10);
+    }
+    if (!appid) {
+      const typed = prompt("AppID for this item (e.g. 294100):");
+      appid = parseInt(typed || "0", 10);
+    }
+    if (!appid) {
+      setStatus("需要有效的 AppID。", "err");
+      return;
+    }
+    btn.disabled = true;
+    setStatus("正在加入 SWD 下载队列…");
+    try {
+      const resp = await fetch("{{ url_for('api_downloads_create') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appid: appid,
+          workshopid: parseInt(btn.dataset.id, 10),
+          title: btn.dataset.title || "",
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setStatus("入队失败: " + (data.description || resp.statusText), "err");
+        btn.disabled = false;
+        return;
+      }
+      const n = (data.jobs || []).length;
+      const job = (data.jobs || [])[0];
+      setStatus(
+        "已用 SWD 入队 " + n + " 个任务" +
+        (job ? "（" + (job.title || job.workshop_id) + "）" : "") +
+        " → <a href=\"{{ url_for('downloads_page') }}\">查看进度</a>",
+        "ok"
+      );
+      // Jump to progress page after a short beat.
+      setTimeout(function () {
+        location.href = "{{ url_for('downloads_page') }}";
+      }, 600);
+    } catch (e) {
+      setStatus("入队失败: " + e, "err");
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

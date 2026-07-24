@@ -1,14 +1,17 @@
 """Proxy URL parsing + ``pysocks`` wiring.
 
-Two layers:
+Layers:
 
-- :func:`parse_proxy_url` is a pure function (no I/O, easy to unit-test).
-- :func:`setup_proxy` mutates the global ``socket.socket`` to route every
-  outbound connection through the parsed proxy.
+- :func:`parse_proxy_url` — pure function (no I/O, easy to unit-test).
+- :func:`setup_proxy` — configures global PySocks + stdlib ``socket.socket``.
+- :func:`patch_steam_cm_tcp` — routes ValvePython Steam **CM** TCP through
+  PySocks. Required because CM uses ``gevent.socket``, which ignores the
+  stdlib ``socket.socket = socks.socksocket`` assignment.
 """
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -151,10 +154,84 @@ def _make_getaddrinfo_wrapper(
     return getaddrinfo
 
 
-def setup_proxy(url: str) -> ParsedProxy:
-    """Parse ``url`` and configure ``pysocks`` as the default proxy.
+def patch_steam_cm_tcp() -> bool:
+    """Route Steam CM TCP through the configured PySocks default proxy.
 
-    Mutates ``socket.socket`` and ``socket.getaddrinfo`` globally.
+    ValvePython's CM client (``steam.core.connection.TCPConnection``) builds
+    sockets with ``gevent.socket.socket``, which allocates a **raw**
+    ``_socket.socket``. That path never sees
+    ``socket.socket = socks.socksocket``, so without this patch:
+
+    * CDN HTTP / media urllib may use the proxy
+    * ``PublishedFile.QueryFiles`` / ``GetDetails`` CM traffic goes **direct**
+      and often times out behind a GFW / restricted network
+
+    Implementation: perform the SOCKS/HTTP-CONNECT handshake with a blocking
+    ``socks.socksocket`` (honours ``socks.set_default_proxy``), ``detach()``
+    the FD, then wrap it in a non-blocking ``gevent.socket`` for the CM
+    reader/writer greenlets.
+
+    Returns ``True`` if the patch is active (or already was). ``False`` if
+    steam/gevent/pysocks are unavailable.
+    """
+    try:
+        import socket as std_socket
+
+        import socks
+        from gevent import socket as gsocket
+        from steam.core.connection import TCPConnection
+    except ImportError:
+        return False
+
+    if getattr(TCPConnection, "_swd_proxy_patched", False):
+        return True
+
+    def _new_socket(self) -> None:
+        # Real socket is created in _connect after the proxy handshake.
+        self.socket = None
+
+    def _connect(self, server_addr: tuple) -> None:
+        raw = socks.socksocket(std_socket.AF_INET, std_socket.SOCK_STREAM)
+        # Don't hang forever if the proxy is dead / blackholed.
+        raw.settimeout(30)
+        try:
+            raw.connect(server_addr)
+        except OSError:
+            with contextlib.suppress(Exception):
+                raw.close()
+            raise
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                raw.close()
+            # Connection.connect only catches socket.error (OSError).
+            raise OSError(str(e)) from e
+
+        raw.settimeout(None)
+        with contextlib.suppress(Exception):
+            raw.setblocking(False)
+
+        fd = raw.detach()
+        try:
+            self.socket = gsocket.socket(gsocket.AF_INET, gsocket.SOCK_STREAM, fileno=fd)
+        except Exception:
+            with contextlib.suppress(Exception):
+                std_socket.socket(fileno=fd).close()
+            raise
+
+    TCPConnection._new_socket = _new_socket  # type: ignore[method-assign]
+    TCPConnection._connect = _connect  # type: ignore[method-assign]
+    TCPConnection._swd_proxy_patched = True  # type: ignore[attr-defined]
+    return True
+
+
+def setup_proxy(url: str) -> ParsedProxy:
+    """Parse ``url`` and configure proxy for stdlib + Steam CM + CDN paths.
+
+    * ``pysocks.set_default_proxy`` + ``socket.socket = socks.socksocket``
+      (stdlib / anything that uses the socket factory)
+    * :func:`patch_steam_cm_tcp` so gevent CM connections also tunnel
+    * ``getaddrinfo`` fallback for flaky dual-stack DNS
+
     Idempotent — calling twice just reconfigures. Returns the
     :class:`ParsedProxy` for inspection / tests.
     """
@@ -178,7 +255,15 @@ def setup_proxy(url: str) -> ParsedProxy:
     # for Steam domains even though the host is resolvable.
     _orig_getaddrinfo = socket.getaddrinfo
     socket.getaddrinfo = _make_getaddrinfo_wrapper(_orig_getaddrinfo)
+
+    # Critical: without this, QueryFiles/GetDetails CM traffic bypasses proxy.
+    patch_steam_cm_tcp()
     return parsed
 
 
-__all__ = ["ParsedProxy", "parse_proxy_url", "setup_proxy"]
+__all__ = [
+    "ParsedProxy",
+    "parse_proxy_url",
+    "patch_steam_cm_tcp",
+    "setup_proxy",
+]

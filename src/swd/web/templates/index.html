@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}
+  {% if appid %}App {{ appid }} — SWD Workshop{% else %}SWD Workshop Browser{% endif %}
+{% endblock %}
+{% block content %}
+<section class="search-panel">
+  <form class="search-form" method="get" action="{{ url_for('index') }}">
+    <label>
+      <span>AppID</span>
+      <input type="text" name="appid" value="{{ appid }}" placeholder="e.g. 294100" required inputmode="numeric">
+    </label>
+    <label class="grow">
+      <span>Search</span>
+      <input type="text" name="q" value="{{ q }}" placeholder="mod name or keywords (optional)">
+    </label>
+    <label>
+      <span>Sort</span>
+      <select name="sort">
+        <option value="trend" {% if sort == 'trend' %}selected{% endif %}>Trending</option>
+        <option value="votes" {% if sort == 'votes' %}selected{% endif %}>Top rated</option>
+        <option value="subscriptions" {% if sort == 'subscriptions' %}selected{% endif %}>Most subscribed</option>
+        <option value="new" {% if sort == 'new' %}selected{% endif %}>Newest</option>
+        <option value="search" {% if sort == 'search' %}selected{% endif %}>Text search</option>
+      </select>
+    </label>
+    <button type="submit">Search</button>
+  </form>
+  <p class="hint">Tip: RimWorld <code>294100</code> · download with <code>swd &lt;appid&gt; &lt;workshopid&gt;</code></p>
+</section>
+
+{% if error %}
+  <div class="alert error">{{ error }}</div>
+{% endif %}
+
+{% if has_query and not error %}
+  <div class="results-meta">
+    <strong>{{ total }}</strong> result{{ '' if total == 1 else 's' }}
+    · page {{ page }} / {{ total_pages }}
+  </div>
+
+  {% if items %}
+  <div class="card-grid">
+    {% for item in items %}
+    <div class="card">
+      <a class="card-main" href="{{ url_for('item_detail', item_id=item.id) }}{% if appid %}?appid={{ appid }}{% endif %}">
+        <div class="card-preview">
+          {% if item.preview_src %}
+          <img src="{{ item.preview_src }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+          {% else %}
+          <div class="preview-placeholder">No preview</div>
+          {% endif %}
+          {% if item.is_collection %}<span class="badge">Collection</span>{% endif %}
+        </div>
+        <div class="card-body">
+          <h2 class="card-title">{{ item.title }}</h2>
+          <p class="card-desc">{{ item.short_description[:160] }}{% if item.short_description|length > 160 %}…{% endif %}</p>
+          <div class="card-stats">
+            <span title="Subscriptions">↓ {{ item.subscriptions }}</span>
+            <span title="Favorites">★ {{ item.favorited }}</span>
+            {% if item.file_size_human %}<span>{{ item.file_size_human }}</span>{% endif %}
+          </div>
+        </div>
+      </a>
+      {% if download_enabled and appid %}
+      <button
+        type="button"
+        class="card-dl btn-dl"
+        data-appid="{{ appid }}"
+        data-id="{{ item.id }}"
+        data-title="{{ item.title|e }}"
+        title="用 SWD 下载到本机"
+      >↓ SWD</button>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No items on this page.</p>
+  {% endif %}
+
+  <nav class="pagination">
+    {% if page > 1 %}
+    {# Prefer browser history so we reuse the cached previous cursor page. #}
+    <a href="javascript:history.back()">← Prev</a>
+    {% else %}
+    <span class="disabled">← Prev</span>
+    {% endif %}
+    <span class="page-num">{{ page }} / {{ total_pages }}</span>
+    {% if next_cursor and page < total_pages %}
+    <a href="{{ url_for('index', appid=appid, q=q, sort=sort, page=page+1, per_page=per_page, cursor=next_cursor) }}">Next →</a>
+    {% elif page < total_pages %}
+    {# Fallback without cursor (slower on Steam); still better than stuck UI. #}
+    <a href="{{ url_for('index', appid=appid, q=q, sort=sort, page=page+1, per_page=per_page) }}">Next →</a>
+    {% else %}
+    <span class="disabled">Next →</span>
+    {% endif %}
+  </nav>
+{% elif not has_query %}
+  <p class="empty">Enter an AppID to list Workshop items.</p>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+{% if download_enabled %}
+<script>
+(function () {
+  document.querySelectorAll(".btn-dl").forEach(function (btn) {
+    btn.addEventListener("click", async function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const appid = parseInt(btn.dataset.appid || "0", 10);
+      const id = parseInt(btn.dataset.id || "0", 10);
+      if (!appid || !id) return;
+      btn.disabled = true;
+      btn.textContent = "…";
+      try {
+        const resp = await fetch("{{ url_for('api_downloads_create') }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appid: appid,
+            workshopid: id,
+            title: btn.dataset.title || "",
+          }),
+        });
+        if (!resp.ok) throw new Error(resp.statusText);
+        btn.textContent = "✓";
+      } catch (e) {
+        btn.textContent = "!";
+        btn.disabled = false;
+      }
+    });
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

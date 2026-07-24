@@ -28,6 +28,13 @@ src/swd/             Production code
   ui/                Human output
     log.py           Colors, Log
     progress.py      Progress, ItemStats
+  web/               Optional Flask browse/search UI (extra: web)
+    app.py           create_app + JSON/HTML routes
+    session.py       SteamSession (locked anonymous client)
+    serialize.py     WorkshopItem → dict
+    cli.py           swd-web entry
+    templates/       Jinja2
+    static/          CSS
 
 tests/               pytest suite, all mock Steam and ctypes
   conftest.py        shared fixtures: FakeCDN, FakeFile, FakeManifest
@@ -50,10 +57,9 @@ Single direction, no cycles:
 
 ```
 cli  →  download  →  steam  →  valve-python/steam
-              ↘
-               dll  →  ctypes
-              ↗
-ui ←────────────┘    (used by download + cli; never imports them)
+web  ─────────────↗     ↘
+                         dll  →  ctypes
+ui  ←───────────────────┘    (used by download + cli + web; never imports them)
 ```
 
 ## Entry points
@@ -61,6 +67,7 @@ ui ←────────────┘    (used by download + cli; never 
 | How                                                | What runs                          |
 |----------------------------------------------------|------------------------------------|
 | `swd ...` (after `pip install .`)                  | `swd.cli:cmd_swd`                  |
+| `swd-web` (after `pip install '.[web]'`)           | `swd.web.cli:main`                 |
 | `python -m swd ...`                                | `swd.__main__` → `swd.cli.cmd_swd` |
 | `python -c "import swd; print(swd.__version__)"`   | (just import)                      |
 | `pytest`                                           | all tests under `tests/`           |
@@ -76,6 +83,9 @@ installed (e.g. for linting or quick version checks).
 | `cmd_swd(argv)` | `swd/cli.py` | Top-level entry; returns exit code |
 | `init_session(proxy_url, log)` | `swd/steam/session.py` | Login + CDNClient setup |
 | `resolve_ids(client, app_id, ids, log)` | `swd/steam/workshop.py` | Expand collections recursively |
+| `query_files(client, app_id, ...)` | `swd/steam/workshop.py` | Browse/search Workshop (QueryFiles) |
+| `get_item_details(client, id, log=)` | `swd/steam/workshop.py` | Single-item GetDetails → WorkshopItem |
+| `create_app(proxy_url, log, steam=)` | `swd/web/app.py` | Flask factory for browse UI/API |
 | `parse_proxy_url(url)` | `swd/steam/proxy.py` | Pure URL parsing (testable) |
 | `setup_proxy(url)` | `swd/steam/proxy.py` | Configure `pysocks` globally |
 | `patch_cdn_client_get_chunk()` | `swd/steam/patch.py` | Monkey-patch CDNClient decompression |
@@ -189,6 +199,7 @@ Tests mock ctypes entirely; the real DLL is not needed for CI.
 
 - `PublishedFile.GetDetails#1` — UM (User Messaging) protobuf call via `client.send_um_and_wait()`
 - Fields needed: `file_type` (2=collection), `children`, `hcontent_file`, `consumer_appid`
+- `PublishedFile.QueryFiles#1` — browse/search/paginate Workshop (`search_text`, `page`, `numperpage`, `query_type`)
 - CDN chunk URL: `depot/<depot_id>/chunk/<sha_hex>`
 
 ## Testing locally

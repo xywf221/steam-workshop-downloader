@@ -93,6 +93,9 @@ def test_setup_proxy_uses_pysocks(monkeypatch) -> None:
     monkeypatch.setattr(builtins, "__import__", fake_import)
     from swd.steam import proxy as proxy_mod
 
+    # Avoid permanently patching real TCPConnection with FakeSocks in this test.
+    monkeypatch.setattr(proxy_mod, "patch_steam_cm_tcp", lambda: True)
+
     parsed = proxy_mod.setup_proxy("http://alice:secret@proxy:8080")
 
     assert captured["proto"] == FakeSocks.HTTP
@@ -102,3 +105,70 @@ def test_setup_proxy_uses_pysocks(monkeypatch) -> None:
     assert captured["username"] == "alice"
     assert captured["password"] == "secret"
     assert parsed.username == "alice"
+
+
+def test_patch_steam_cm_tcp_replaces_connect(monkeypatch) -> None:
+    """CM TCP connect must go through socks.socksocket, not raw gevent sockets."""
+    pytest.importorskip("steam")
+    pytest.importorskip("gevent")
+    pytest.importorskip("socks")
+
+    from steam.core.connection import TCPConnection
+
+    from swd.steam.proxy import patch_steam_cm_tcp
+
+    orig_new = TCPConnection._new_socket
+    orig_conn = TCPConnection._connect
+    had_flag = getattr(TCPConnection, "_swd_proxy_patched", False)
+    # Force re-apply for this test.
+    if had_flag:
+        TCPConnection._swd_proxy_patched = False  # type: ignore[attr-defined]
+
+    connected_to: list[tuple] = []
+
+    class FakeSock:
+        def __init__(self, *a, **k):
+            self._timeout = None
+            self._blocking = True
+
+        def settimeout(self, t):
+            self._timeout = t
+
+        def setblocking(self, b):
+            self._blocking = b
+
+        def connect(self, addr):
+            connected_to.append(addr)
+
+        def detach(self):
+            return 999999  # bogus fd — we will not wrap for real
+
+        def close(self):
+            pass
+
+    import socks as real_socks
+
+    monkeypatch.setattr(real_socks, "socksocket", FakeSock)
+
+    # Avoid creating a real gevent socket from a fake fd.
+    import gevent.socket as gsocket
+
+    class FakeGreen:
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(gsocket, "socket", FakeGreen)
+
+    try:
+        assert patch_steam_cm_tcp() is True
+        assert TCPConnection._swd_proxy_patched is True  # type: ignore[attr-defined]
+        conn = TCPConnection()
+        conn._new_socket()
+        assert conn.socket is None
+        conn._connect(("203.0.113.1", 27017))
+        assert connected_to == [("203.0.113.1", 27017)]
+        assert isinstance(conn.socket, FakeGreen)
+    finally:
+        TCPConnection._new_socket = orig_new
+        TCPConnection._connect = orig_conn
+        TCPConnection._swd_proxy_patched = had_flag  # type: ignore[attr-defined]

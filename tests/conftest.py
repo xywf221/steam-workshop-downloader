@@ -2,14 +2,18 @@
 
 The DLL tests mock ctypes so they can run on any OS. Tests that touch the
 ``steam`` package get ``sys.modules['steam']`` pre-populated with a
-MagicMock, so importing our package doesn't pull in ``steam[client]`` on
-the test runner.
+lightweight stub, so importing our package doesn't pull in ``steam[client]``
+on the test runner (or on Linux CI without the DLL).
+
+If a real ``steam`` install is already importable we leave it alone so
+integration-style tests can use the genuine library.
 """
 
 from __future__ import annotations
 
 import sys
 import types
+from enum import IntEnum
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,16 +22,69 @@ import pytest
 def _install_steam_stub() -> None:
     """Stub the ``steam`` package so we don't need it installed to import ``swd``."""
     if "steam" in sys.modules:
+        # Already present — either a previous stub or the real package.
         return
+    try:
+        import steam  # noqa: F401
+
+        return  # real package is available; don't shadow it
+    except ImportError:
+        pass
+
+    class EResult(IntEnum):
+        Invalid = 0
+        OK = 1
+        Fail = 2
+        FileNotFound = 9
+        Timeout = 16
+
+    class SteamError(Exception):
+        def __init__(self, message, eresult=EResult.Fail):
+            Exception.__init__(self, message, eresult)
+            self.message = message
+            self.eresult = EResult(eresult)
+
+        def __str__(self) -> str:
+            return f"({self.eresult}) {self.message}"
+
+    class ManifestError(SteamError):
+        def __init__(self, message, app_id, depot_id, manifest_gid, error=None):
+            self.message = message
+            self.app_id = app_id
+            self.depot_id = depot_id
+            self.manifest_gid = manifest_gid
+            self.error = error
+            if isinstance(error, SteamError):
+                self.eresult = error.eresult
+            else:
+                self.eresult = EResult.Fail
+
+        def __str__(self) -> str:
+            return (
+                f"({self.eresult}) {self.message} "
+                f"(app={self.app_id} depot={self.depot_id} manifest={self.manifest_gid})"
+            )
+
+    class CDNClient:
+        """Minimal stand-in; methods get monkey-patched by swd.steam.patch."""
+
+        get_chunk = None
+        get_manifest_for_workshop_item = None
+
     steam = types.ModuleType("steam")
     client = types.ModuleType("steam.client")
+    client.SteamClient = MagicMock()
+    client.EResult = EResult  # historical re-export used by older code paths
     client_cdn = types.ModuleType("steam.client.cdn")
-    client_cdn.CDNClient = MagicMock()
+    client_cdn.CDNClient = CDNClient
     core = types.ModuleType("steam.core")
     core_crypto = types.ModuleType("steam.core.crypto")
     core_crypto.symmetric_decrypt = MagicMock()
     exceptions = types.ModuleType("steam.exceptions")
-    exceptions.SteamError = type("SteamError", (Exception,), {})
+    exceptions.SteamError = SteamError
+    exceptions.ManifestError = ManifestError
+    enums = types.ModuleType("steam.enums")
+    enums.EResult = EResult
 
     sys.modules["steam"] = steam
     sys.modules["steam.client"] = client
@@ -35,6 +92,7 @@ def _install_steam_stub() -> None:
     sys.modules["steam.core"] = core
     sys.modules["steam.core.crypto"] = core_crypto
     sys.modules["steam.exceptions"] = exceptions
+    sys.modules["steam.enums"] = enums
 
     try:
         import tqdm.auto  # noqa: F401

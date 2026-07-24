@@ -34,6 +34,7 @@ def test_parse_args_minimal() -> None:
     assert ns.workshopid == [3683834622]
     assert ns.proxy is None
     assert ns.retries == 5
+    assert ns.jobs == 0  # auto
     assert ns.color is None  # auto
     assert ns.log_file is None
 
@@ -50,6 +51,8 @@ def test_parse_args_all_flags() -> None:
             "socks5://127.0.0.1:1080",
             "--retries",
             "10",
+            "-j",
+            "4",
             "--no-color",
             "--log-file",
             "run.log",
@@ -59,6 +62,7 @@ def test_parse_args_all_flags() -> None:
     assert ns.verbose is True
     assert ns.proxy == "socks5://127.0.0.1:1080"
     assert ns.retries == 10
+    assert ns.jobs == 4
     assert ns.color is False
     assert str(ns.log_file) == "run.log"  # Path
 

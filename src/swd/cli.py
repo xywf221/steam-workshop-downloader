@@ -10,7 +10,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import NoReturn
 
-from swd.constants import APP_NAME, DEFAULT_OUTPUT, DEFAULT_RETRIES, VERSION
+from swd.constants import (
+    APP_NAME,
+    DEFAULT_JOBS,
+    DEFAULT_OUTPUT,
+    DEFAULT_RETRIES,
+    MAX_AUTO_JOBS,
+    VERSION,
+)
 from swd.dll import enable_vt_on_windows
 from swd.download import download_item
 from swd.steam import init_session, resolve_ids
@@ -42,6 +49,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_RETRIES,
         help=f"per-file retry attempts on failure (default: {DEFAULT_RETRIES})",
+    )
+    p.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=DEFAULT_JOBS,
+        metavar="N",
+        help=(
+            "parallel file downloads within each workshop item. "
+            f"0 = auto (min(file_count, {MAX_AUTO_JOBS}), default). "
+            "1 = serial (old behaviour). N = fixed worker count."
+        ),
     )
     color_group = p.add_mutually_exclusive_group()
     color_group.add_argument(
@@ -92,6 +111,10 @@ def cmd_swd(argv: Sequence[str] | None = None) -> int:
         log.dim(f"  Proxy: {proxy_url or '(direct connection)'}")
         log.dim(f"  Output: {output}")
         log.dim(f"  Retries per file: {args.retries}")
+        jobs_label = (
+            f"auto (cap {MAX_AUTO_JOBS})" if args.jobs <= 0 else str(args.jobs)
+        )
+        log.dim(f"  Jobs per item: {jobs_label}")
 
         client, cdn = init_session(proxy_url, log)
         if client is None:
@@ -110,7 +133,7 @@ def cmd_swd(argv: Sequence[str] | None = None) -> int:
         log.info(f"\n{total_items} item{'s' if total_items > 1 else ''} to download")
 
         run_start = time.perf_counter()
-        total_ok = total_fail = total_bytes = 0
+        total_ok = total_fail = total_skip = total_bytes = 0
         failed_items = 0
 
         with Progress(total_items=total_items, log=log, verbose=args.verbose) as prog:
@@ -125,6 +148,7 @@ def cmd_swd(argv: Sequence[str] | None = None) -> int:
                     log,
                     verbose=args.verbose,
                     retries=args.retries,
+                    jobs=args.jobs,
                 )
                 prog.end_item()
                 if stats is None or stats.fully_failed:
@@ -132,6 +156,7 @@ def cmd_swd(argv: Sequence[str] | None = None) -> int:
                 else:
                     total_ok += stats.ok
                     total_fail += stats.fail
+                    total_skip += stats.skipped
                     total_bytes += stats.bytes_done
 
         duration = time.perf_counter() - run_start
@@ -146,10 +171,15 @@ def cmd_swd(argv: Sequence[str] | None = None) -> int:
             f"  Items:  {total_items} total / "
             f"{total_items - failed_items} ok / {failed_items} failed"
         )
+        files_total = total_ok + total_fail + total_skip
+        files_parts = [f"{total_ok} ok"]
+        if total_skip:
+            files_parts.append(f"{total_skip} skipped")
+        files_parts.append(f"{total_fail} failed")
         log.info(
-            f"  Files:  {total_ok + total_fail} total / "
-            f"{total_ok} ok / {total_fail} failed  "
-            f"({fmt_size(total_bytes)})"
+            f"  Files:  {files_total} total / "
+            f"{' / '.join(files_parts)}  "
+            f"({fmt_size(total_bytes)} downloaded)"
         )
         log.info(f"  Duration: {fmt_duration(duration)}")
         if total_bytes > 0 and duration > 0:

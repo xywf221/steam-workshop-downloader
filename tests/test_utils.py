@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from swd.utils import compute_backoff, fmt_duration, fmt_size
+from swd.utils import compute_backoff, fmt_duration, fmt_size, suggest_jobs
 
 
 @pytest.mark.parametrize(
@@ -56,3 +56,21 @@ def test_fmt_duration_negative_clamps_to_zero() -> None:
 )
 def test_compute_backoff(attempt: int, expected: int) -> None:
     assert compute_backoff(attempt) == expected
+
+
+@pytest.mark.parametrize(
+    "n_files,max_jobs,expected",
+    [
+        (0, 8, 1),
+        (1, 8, 1),
+        (3, 8, 3),
+        (8, 8, 8),
+        (20, 8, 8),
+        (20, 4, 4),
+        (5, 1, 1),
+        (-1, 8, 1),
+        (10, 0, 1),  # max_jobs clamped to >= 1
+    ],
+)
+def test_suggest_jobs(n_files: int, max_jobs: int, expected: int) -> None:
+    assert suggest_jobs(n_files, max_jobs=max_jobs) == expected

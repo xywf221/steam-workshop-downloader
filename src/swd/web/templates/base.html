@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SWD Workshop Browser{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-left">
+      <a class="brand" href="{{ url_for('index') }}">SWD Workshop</a>
+      <span class="tagline">browse · search · download</span>
+    </div>
+    <nav class="header-nav">
+      <a href="{{ url_for('index') }}">Browse</a>
+      {% if download_enabled %}
+      <a href="{{ url_for('downloads_page') }}">
+        Downloads
+        {% if download_counts and (download_counts.queued or download_counts.running) %}
+        <span class="nav-badge">{{ (download_counts.queued or 0) + (download_counts.running or 0) }}</span>
+        {% endif %}
+      </a>
+      {% endif %}
+    </nav>
+  </header>
+  <main class="container">
+    {% if download_enabled %}
+    <p class="output-hint">Downloads → <code>{{ download_output }}</code></p>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <span>Steam Workshop Downloader</span>
+    <span class="dim">Anonymous Steam session · no API key</span>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

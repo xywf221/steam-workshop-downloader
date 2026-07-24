@@ -17,6 +17,10 @@ def test_fully_failed_property() -> None:
     assert not ItemStats(out_dir=None, ok=2, fail=1).fully_failed
     assert ItemStats(out_dir=None, ok=0, fail=1).fully_failed
     assert ItemStats(out_dir=None, ok=0, fail=5).fully_failed
+    # All-skipped is still a successful item (nothing to fetch).
+    assert not ItemStats(out_dir=None, ok=0, fail=0, skipped=3).fully_failed
+    # Skipped + failed still counts as not fully failed (something kept).
+    assert not ItemStats(out_dir=None, ok=0, fail=1, skipped=2).fully_failed
 
 
 def test_progress_no_tty_no_bars(log: Log, captured_stderr) -> None:
@@ -86,3 +90,21 @@ def test_progress_end_files_logs_size_and_path(log: Log, captured_stderr, tmp_pa
     assert "3 ok" in out
     assert "1 fail" in out
     assert "2.0 KB" in out
+
+
+def test_progress_end_files_includes_skip_count(log: Log, captured_stderr, tmp_path) -> None:
+    prog = Progress(total_items=1, log=log)
+    with prog:
+        prog.end_files(
+            ItemStats(
+                out_dir=tmp_path / "x",
+                ok=1,
+                fail=0,
+                skipped=2,
+                bytes_done=100,
+                duration=0.2,
+            )
+        )
+    out = captured_stderr()
+    assert "3 files" in out
+    assert "2 skip" in out

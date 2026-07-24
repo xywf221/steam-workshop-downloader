@@ -19,6 +19,18 @@ class FakeFile:
     is_file: bool = True
     read_count: int = 0
     read_side_effects: list[Callable[[], object]] = field(default_factory=list)
+    # When None, sha_content is derived from ``data`` (SHA-1) so skip-if-match works.
+    # Set to ``b""`` to simulate a missing / unusable hash.
+    sha_content: bytes | None = None
+    size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.size is None:
+            self.size = len(self.data)
+        if self.sha_content is None:
+            import hashlib
+
+            self.sha_content = hashlib.sha1(self.data).digest()
 
     def read(self) -> bytes:
         self.read_count += 1
