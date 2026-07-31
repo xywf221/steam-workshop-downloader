@@ -45,8 +45,11 @@ cli → download → cdn → cm / workshop / manifest / crypto
     chunkcodec → dll
 cli → steam.InitSession → cm + proxy
 cli → web → browse SteamSession + download SteamSession
-         → DownloadManager → download.DownloadItem
+         → DownloadManager → download.DownloadItem (parallel files; Progress mutex)
+         → MediaCache (LRU preview bytes) + BrowseCache (QueryFiles TTL)
 ```
+
+Web layout: `server.go` (lifecycle) · `handlers_*.go` · `session.go` · `downloads.go` · `media.go` · `cache.go`.
 
 ## Entry points
 
@@ -62,7 +65,7 @@ cli → web → browse SteamSession + download SteamSession
 
 | Name | Value |
 |------|-------|
-| Version | `6.1.0` |
+| Version | `6.1.1` |
 | `RVADecompressAll` | `0xCEAA90` |
 | `RVAPutFunc` / `RVAGetFunc` | `0xEB570` / `0xD3F20` |
 | `MaxChunkSize` | 100 MiB |

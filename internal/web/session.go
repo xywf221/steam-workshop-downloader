@@ -9,17 +9,17 @@ import (
 
 	"github.com/xywf221/steam-workshop-downloader/internal/steam"
 	"github.com/xywf221/steam-workshop-downloader/internal/steam/cdn"
-	"github.com/xywf221/steam-workshop-downloader/internal/steam/cm"
 	"github.com/xywf221/steam-workshop-downloader/internal/ui"
 )
 
-// worker wait = UM budget + slack (matches Python _WORKER_WAIT_S).
+// workerWait = UM budget (30s × 3) + slack, matching Python _WORKER_WAIT_S.
 const workerWait = 30*time.Second*3 + 60*time.Second
 
 type steamJob struct {
-	fn      func(ctx context.Context, sess *steam.Session) (any, error)
+	fn      func(ctx context.Context, sess *steam.Session, cdnClient *cdn.Client) (any, error)
 	result  chan steamResult
-	timeout time.Duration // 0 = wait forever
+	timeout time.Duration // 0 = no deadline on the worker side
+	ctx     context.Context
 }
 
 type steamResult struct {
@@ -36,6 +36,7 @@ type SteamSession struct {
 
 	jobs    chan steamJob
 	started chan struct{}
+	done    chan struct{} // closed when loop exits
 
 	mu     sync.Mutex
 	sess   *steam.Session
@@ -54,6 +55,7 @@ func NewSteamSession(proxyURL string, log *ui.Log, name string) *SteamSession {
 		name:     name,
 		jobs:     make(chan steamJob, 64),
 		started:  make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 	go s.loop()
 	select {
@@ -80,52 +82,64 @@ func (s *SteamSession) LoggedOn() bool {
 	return s.sess.CM.LoggedOn()
 }
 
-// Call runs fn on the Steam worker. timeout=0 waits indefinitely.
+// Call runs fn on the Steam worker. timeout=0 waits indefinitely for the result.
+// The request context (if non-nil via CallCtx) cancels the wait; the worker still
+// finishes the in-flight Steam call.
 func (s *SteamSession) Call(timeout time.Duration, fn func(ctx context.Context, sess *steam.Session) (any, error)) (any, error) {
-	resCh := make(chan steamResult, 1)
-	job := steamJob{fn: fn, result: resCh, timeout: timeout}
-	select {
-	case s.jobs <- job:
-	default:
-		// still try; may block if queue full
-		s.jobs <- job
-	}
-	if timeout == 0 {
-		r := <-resCh
-		return r.val, r.err
-	}
-	select {
-	case r := <-resCh:
-		return r.val, r.err
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("Steam worker [%s] did not finish within %s (UM may be wedged; restart swd web)", s.name, timeout)
-	}
+	return s.CallCtx(context.Background(), timeout, func(ctx context.Context, sess *steam.Session, _ *cdn.Client) (any, error) {
+		return fn(ctx, sess)
+	})
 }
 
 // CallWithCDN runs fn(sess, cdnClient) on the worker.
 func (s *SteamSession) CallWithCDN(timeout time.Duration, fn func(ctx context.Context, sess *steam.Session, cdnClient *cdn.Client) (any, error)) (any, error) {
-	return s.Call(timeout, func(ctx context.Context, sess *steam.Session) (any, error) {
-		s.mu.Lock()
-		c := s.cdn
-		s.mu.Unlock()
-		if c == nil {
-			return nil, fmt.Errorf("CDN client not ready")
-		}
-		return fn(ctx, sess, c)
-	})
+	return s.CallCtx(context.Background(), timeout, fn)
 }
 
-// CM returns the live CM client (must only be used from inside Call).
-func (s *SteamSession) CM() *cm.Client {
+// CallCtx is CallWithCDN with an external cancel for the waiter.
+func (s *SteamSession) CallCtx(parent context.Context, timeout time.Duration, fn func(ctx context.Context, sess *steam.Session, cdnClient *cdn.Client) (any, error)) (any, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.sess == nil {
-		return nil
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil, fmt.Errorf("Steam worker [%s] closed", s.name)
 	}
-	return s.sess.CM
+
+	resCh := make(chan steamResult, 1)
+	job := steamJob{fn: fn, result: resCh, timeout: timeout, ctx: parent}
+	select {
+	case s.jobs <- job:
+	case <-parent.Done():
+		return nil, parent.Err()
+	case <-s.done:
+		return nil, fmt.Errorf("Steam worker [%s] closed", s.name)
+	}
+
+	if timeout == 0 {
+		select {
+		case r := <-resCh:
+			return r.val, r.err
+		case <-parent.Done():
+			return nil, parent.Err()
+		case <-s.done:
+			return nil, fmt.Errorf("Steam worker [%s] closed", s.name)
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case r := <-resCh:
+		return r.val, r.err
+	case <-timer.C:
+		return nil, fmt.Errorf("Steam worker [%s] did not finish within %s (UM may be wedged; restart swd web)", s.name, timeout)
+	case <-parent.Done():
+		return nil, parent.Err()
+	case <-s.done:
+		return nil, fmt.Errorf("Steam worker [%s] closed", s.name)
+	}
 }
 
-// HTTP returns the session HTTP client.
+// HTTP returns the session HTTP client (proxy-aware after login).
 func (s *SteamSession) HTTP() *http.Client {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,7 +166,7 @@ func (s *SteamSession) Warmup() {
 	}
 }
 
-// Close stops the worker and disconnects.
+// Close stops the worker and disconnects. Safe to call multiple times.
 func (s *SteamSession) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -162,35 +176,14 @@ func (s *SteamSession) Close() {
 	s.closed = true
 	s.mu.Unlock()
 	close(s.jobs)
+	<-s.done
 }
 
 func (s *SteamSession) loop() {
+	defer close(s.done)
 	close(s.started)
 	for job := range s.jobs {
-		ctx := context.Background()
-		if job.timeout > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, job.timeout)
-			// cancel after fn returns
-			func() {
-				defer cancel()
-				sess, err := s.ensure(ctx)
-				if err != nil {
-					job.result <- steamResult{err: err}
-					return
-				}
-				val, err := job.fn(ctx, sess)
-				job.result <- steamResult{val: val, err: err}
-			}()
-			continue
-		}
-		sess, err := s.ensure(ctx)
-		if err != nil {
-			job.result <- steamResult{err: err}
-			continue
-		}
-		val, err := job.fn(ctx, sess)
-		job.result <- steamResult{val: val, err: err}
+		s.runJob(job)
 	}
 	s.mu.Lock()
 	if s.sess != nil {
@@ -201,12 +194,41 @@ func (s *SteamSession) loop() {
 	s.mu.Unlock()
 }
 
-func (s *SteamSession) ensure(ctx context.Context) (*steam.Session, error) {
+func (s *SteamSession) runJob(job steamJob) {
+	parent := job.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx := parent
+	var cancel context.CancelFunc
+	if job.timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, job.timeout)
+		defer cancel()
+	}
+
+	sess, cdnClient, err := s.ensure(ctx)
+	if err != nil {
+		select {
+		case job.result <- steamResult{err: err}:
+		default:
+		}
+		return
+	}
+	val, err := job.fn(ctx, sess, cdnClient)
+	select {
+	case job.result <- steamResult{val: val, err: err}:
+	default:
+		// waiter already timed out / cancelled — drop
+	}
+}
+
+func (s *SteamSession) ensure(ctx context.Context) (*steam.Session, *cdn.Client, error) {
+	// Only called from the single worker goroutine — no concurrent ensure.
 	s.mu.Lock()
 	if s.sess != nil && s.sess.CM != nil && s.sess.CM.LoggedOn() {
-		sess := s.sess
+		sess, c := s.sess, s.cdn
 		s.mu.Unlock()
-		return sess, nil
+		return sess, c, nil
 	}
 	if s.sess != nil {
 		if s.log != nil {
@@ -220,7 +242,7 @@ func (s *SteamSession) ensure(ctx context.Context) (*steam.Session, error) {
 
 	sess, err := steam.InitSession(ctx, s.proxyURL, s.log)
 	if err != nil {
-		return nil, fmt.Errorf("Steam anonymous login failed [%s]: %w", s.name, err)
+		return nil, nil, fmt.Errorf("Steam anonymous login failed [%s]: %w", s.name, err)
 	}
 	cdnClient := cdn.New(sess.CM, sess.HTTP(), s.log)
 
@@ -228,5 +250,5 @@ func (s *SteamSession) ensure(ctx context.Context) (*steam.Session, error) {
 	s.sess = sess
 	s.cdn = cdnClient
 	s.mu.Unlock()
-	return sess, nil
+	return sess, cdnClient, nil
 }

@@ -28,24 +28,24 @@ const (
 
 // DownloadJob is one workshop item (or collection child) download.
 type DownloadJob struct {
-	ID          string    `json:"id"`
-	AppID       int       `json:"app_id"`
-	WorkshopID  uint64    `json:"workshop_id"`
-	Title       string    `json:"title"`
-	Status      JobStatus `json:"status"`
-	Message     string    `json:"message"`
-	OutDir      string    `json:"out_dir"`
-	FilesTotal  int       `json:"files_total"`
-	FilesDone   int       `json:"files_done"`
-	FilesOK     int       `json:"files_ok"`
-	FilesFail   int       `json:"files_fail"`
-	FilesSkip   int       `json:"files_skip"`
-	BytesDone   int64     `json:"bytes_done"`
-	CurrentFile string    `json:"current_file"`
-	Error       string    `json:"error"`
-	CreatedAt   float64   `json:"created_at"`
-	StartedAt   *float64  `json:"started_at"`
-	FinishedAt  *float64  `json:"finished_at"`
+	ID          string
+	AppID       int
+	WorkshopID  uint64
+	Title       string
+	Status      JobStatus
+	Message     string
+	OutDir      string
+	FilesTotal  int
+	FilesDone   int
+	FilesOK     int
+	FilesFail   int
+	FilesSkip   int
+	BytesDone   int64
+	CurrentFile string
+	Error       string
+	CreatedAt   float64
+	StartedAt   *float64
+	FinishedAt  *float64
 
 	mu sync.Mutex
 }
@@ -94,13 +94,13 @@ func (j *DownloadJob) ToDict() map[string]any {
 		"files_skip":       j.FilesSkip,
 		"bytes_done":       j.BytesDone,
 		"bytes_done_human": bytesHuman,
-		"percent":          float64(int(pct*10+0.5)) / 10,
+		"percent":          round1(pct),
 		"current_file":     j.CurrentFile,
 		"error":            j.Error,
 		"created_at":       j.CreatedAt,
 		"started_at":       j.StartedAt,
 		"finished_at":      j.FinishedAt,
-		"duration_s":       float64(int(duration*10+0.5)) / 10,
+		"duration_s":       round1(duration),
 	}
 }
 
@@ -175,12 +175,13 @@ func (p *jobProgress) EndFiles(stats download.Stats) {
 	p.job.CurrentFile = ""
 }
 
-// DownloadManager is a serial download queue.
+// DownloadManager is a serial *item* queue; files inside an item may run in parallel.
 type DownloadManager struct {
 	steam     *SteamSession
 	outputDir string
 	log       *ui.Log
 	retries   int
+	fileJobs  int
 
 	mu      sync.Mutex
 	jobsMap map[string]*DownloadJob
@@ -191,7 +192,8 @@ type DownloadManager struct {
 }
 
 // NewDownloadManager starts the worker loop.
-func NewDownloadManager(steam *SteamSession, outputDir string, log *ui.Log, retries int) *DownloadManager {
+// fileJobs: 0 = auto (cap 8), matching CLI -j.
+func NewDownloadManager(steam *SteamSession, outputDir string, log *ui.Log, retries, fileJobs int) *DownloadManager {
 	if retries < 1 {
 		retries = 5
 	}
@@ -200,6 +202,7 @@ func NewDownloadManager(steam *SteamSession, outputDir string, log *ui.Log, retr
 		outputDir: outputDir,
 		log:       log,
 		retries:   retries,
+		fileJobs:  fileJobs,
 		jobsMap:   make(map[string]*DownloadJob),
 		queue:     make(chan string, 256),
 	}
@@ -228,6 +231,9 @@ func (m *DownloadManager) Enqueue(appID int, workshopID uint64, title string) []
 	created := make([]*DownloadJob, 0, len(ids))
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return created
+	}
 	for _, wid := range ids {
 		if existing := m.findActiveLocked(appID, wid); existing != nil {
 			created = append(created, existing)
@@ -250,11 +256,37 @@ func (m *DownloadManager) Enqueue(appID int, workshopID uint64, title string) []
 		}
 		m.jobsMap[id] = job
 		m.order = append(m.order, id)
+		// Bound history so long-running servers do not grow forever.
+		const maxHistory = 500
+		if len(m.order) > maxHistory {
+			drop := m.order[:len(m.order)-maxHistory]
+			m.order = m.order[len(m.order)-maxHistory:]
+			for _, oldID := range drop {
+				if old := m.jobsMap[oldID]; old != nil && old.Status != JobQueued && old.Status != JobRunning {
+					delete(m.jobsMap, oldID)
+				}
+			}
+		}
 		select {
 		case m.queue <- id:
 		default:
-			// drop if closed; still track
-			go func(jid string) { m.queue <- jid }(id)
+			// Channel full — still try non-blocking via goroutine so we don't
+			// hold m.mu while the download worker is idle waiting on us.
+			go func(jid string) {
+				m.mu.Lock()
+				closed := m.closed
+				m.mu.Unlock()
+				if closed {
+					return
+				}
+				select {
+				case m.queue <- jid:
+				case <-time.After(30 * time.Second):
+					if m.log != nil {
+						m.log.Err(fmt.Sprintf("[DL] drop queue push %s (timeout)", jid))
+					}
+				}
+			}(id)
 		}
 		created = append(created, job)
 		if m.log != nil {
@@ -310,7 +342,10 @@ func (m *DownloadManager) Counts() map[string]int {
 		"total": len(m.jobsMap),
 	}
 	for _, j := range m.jobsMap {
-		c[string(j.Status)]++
+		j.mu.Lock()
+		st := j.Status
+		j.mu.Unlock()
+		c[string(st)]++
 	}
 	return c
 }
@@ -362,9 +397,10 @@ func (m *DownloadManager) runOne(job *DownloadJob) {
 		if err := cdnClient.EnsureServers(ctx); err != nil {
 			return nil, err
 		}
+		// First-party CDN client is safe for concurrent ReadFile; Progress is mutexed.
 		stats := download.DownloadItem(ctx, cdnClient, wid, m.outputDir, m.log, download.Options{
 			Retries:  m.retries,
-			Jobs:     1, // serial for web to keep progress simple
+			Jobs:     m.fileJobs, // 0 = auto
 			Progress: prog,
 		})
 		return stats, nil

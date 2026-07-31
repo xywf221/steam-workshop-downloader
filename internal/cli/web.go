@@ -17,10 +17,12 @@ import (
 
 // WebCmd runs the Workshop browse / download web UI.
 type WebCmd struct {
-	Host   string `default:"127.0.0.1" help:"Bind host"`
-	Port   int    `default:"8765" help:"Bind port"`
-	Output string `short:"o" default:"." help:"Download directory for web-triggered jobs"`
-	Proxy  string `help:"Optional proxy URL (socks5/socks4/http); needs full TCP for Steam CM :27017"`
+	Host    string `default:"127.0.0.1" help:"Bind host"`
+	Port    int    `default:"8765" help:"Bind port"`
+	Output  string `short:"o" default:"." help:"Download directory for web-triggered jobs"`
+	Proxy   string `help:"Optional proxy URL (socks5/socks4/http); needs full TCP for Steam CM :27017"`
+	Jobs    int    `short:"j" default:"0" help:"Parallel file downloads per item (0=auto cap 8, 1=serial)"`
+	Retries int    `default:"5" help:"Per-file retry attempts on failure"`
 }
 
 // Run implements kong Runner.
@@ -55,12 +57,17 @@ func (c *WebCmd) Run() error {
 		log.Info(fmt.Sprintf("Proxy: %s (%s)", p.RedactedURL(), auth))
 	}
 
+	if c.Retries < 1 {
+		return fmt.Errorf("--retries must be >= 1")
+	}
 	srv, err := web.New(web.Config{
 		Host:      c.Host,
 		Port:      c.Port,
 		OutputDir: outDir,
 		ProxyURL:  c.Proxy,
 		Log:       log,
+		FileJobs:  c.Jobs,
+		Retries:   c.Retries,
 	})
 	if err != nil {
 		return err

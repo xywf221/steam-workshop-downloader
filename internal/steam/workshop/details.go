@@ -93,70 +93,9 @@ func getDetailsBatch(ctx context.Context, client *cm.Client, ids []uint64, inclu
 }
 
 func parseGetDetailsResponse(body []byte) ([]Item, error) {
-	fields, err := pb.Decode(body)
-	if err != nil {
-		return nil, err
-	}
-	var items []Item
-	for _, f := range fields {
-		if f.Number != 1 || f.Wire != pb.WireBytes { // publishedfiledetails
-			continue
-		}
-		it, err := parsePublishedFileDetails(f.Bytes)
-		if err != nil {
-			continue
-		}
-		items = append(items, it)
-	}
-	return items, nil
-}
-
-func parsePublishedFileDetails(data []byte) (Item, error) {
-	fields, err := pb.Decode(data)
-	if err != nil {
-		return Item{}, err
-	}
-	var it Item
-	for _, f := range fields {
-		switch f.Number {
-		case 1: // result uint32
-			it.Result = uint32(f.Varint)
-		case 2: // publishedfileid fixed64/uint64
-			if f.Wire == pb.WireFixed64 {
-				it.ID = f.Fixed64
-			} else {
-				it.ID = f.Varint
-			}
-		case 5: // consumer_appid
-			it.ConsumerAppID = uint32(f.Varint)
-		case 8: // file_size uint64
-			if f.Wire == pb.WireFixed64 {
-				it.FileSize = f.Fixed64
-			} else {
-				it.FileSize = f.Varint
-			}
-		case 14: // hcontent_file fixed64
-			if f.Wire == pb.WireFixed64 {
-				it.HContentFile = f.Fixed64
-			} else {
-				it.HContentFile = f.Varint
-			}
-		case 16: // title
-			it.Title = string(f.Bytes)
-		case 34: // file_type
-			it.FileType = uint32(f.Varint)
-		case 53: // children message
-			if f.Wire == pb.WireBytes {
-				if cid := parseChildID(f.Bytes); cid != 0 {
-					it.Children = append(it.Children, cid)
-				}
-			}
-		}
-	}
-	if it.ID == 0 {
-		return Item{}, fmt.Errorf("missing publishedfileid")
-	}
-	return it, nil
+	// Share the rich parser used by QueryFiles / GetItemDetails so download
+	// and browse paths stay in sync on field numbers.
+	return parseGetDetailsResponseRich(body)
 }
 
 func parseChildID(data []byte) uint64 {

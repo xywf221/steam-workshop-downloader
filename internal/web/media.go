@@ -1,22 +1,26 @@
 package web
 
 import (
+	"container/list"
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	maxMediaBytes      = 8 * 1024 * 1024
 	mediaTimeout       = 12 * time.Second
-	maxMediaConcurrent = 3
+	maxMediaConcurrent = 4
+	mediaCacheTTL      = 1 * time.Hour
+	mediaCacheMax      = 64
+	mediaCacheMaxBytes = 32 * 1024 * 1024
 )
-
-var mediaSem = make(chan struct{}, maxMediaConcurrent)
 
 // Host suffixes Valve uses for Workshop previews / community images.
 var allowedHostSuffixes = []string{
@@ -34,7 +38,6 @@ func IsAllowedMediaHost(host string) bool {
 	if h == "" || h == "localhost" || strings.HasSuffix(h, ".local") {
 		return false
 	}
-	// Reject raw IPs (SSRF).
 	if ip := net.ParseIP(h); ip != nil {
 		return false
 	}
@@ -70,31 +73,130 @@ func ValidateMediaURL(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// FetchMedia downloads a Steam preview image, optionally via proxy.
-// httpClient should already honour --proxy when set (from steam session).
-func FetchMedia(httpClient *http.Client, rawURL string) (body []byte, contentType string, err error) {
+type mediaEntry struct {
+	key         string
+	body        []byte
+	contentType string
+	expires     time.Time
+}
+
+// MediaCache is a process-local LRU+TTL cache for preview bytes.
+type MediaCache struct {
+	mu       sync.Mutex
+	maxItems int
+	maxBytes int
+	ttl      time.Duration
+	bytes    int
+	data     map[string]*list.Element
+	order    *list.List
+	sem      chan struct{}
+}
+
+// NewMediaCache builds a media cache with concurrency limit.
+func NewMediaCache() *MediaCache {
+	return &MediaCache{
+		maxItems: mediaCacheMax,
+		maxBytes: mediaCacheMaxBytes,
+		ttl:      mediaCacheTTL,
+		data:     make(map[string]*list.Element),
+		order:    list.New(),
+		sem:      make(chan struct{}, maxMediaConcurrent),
+	}
+}
+
+func (c *MediaCache) get(key string) (body []byte, ctype string, ok bool) {
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, hit := c.data[key]
+	if !hit {
+		return nil, "", false
+	}
+	ent := el.Value.(*mediaEntry)
+	if !ent.expires.After(now) {
+		c.removeLocked(el)
+		return nil, "", false
+	}
+	c.order.MoveToBack(el)
+	return ent.body, ent.contentType, true
+}
+
+func (c *MediaCache) put(key string, body []byte, ctype string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, hit := c.data[key]; hit {
+		old := el.Value.(*mediaEntry)
+		c.bytes -= len(old.body)
+		old.body = body
+		old.contentType = ctype
+		old.expires = time.Now().Add(c.ttl)
+		c.bytes += len(body)
+		c.order.MoveToBack(el)
+		c.evictLocked()
+		return
+	}
+	ent := &mediaEntry{
+		key:         key,
+		body:        body,
+		contentType: ctype,
+		expires:     time.Now().Add(c.ttl),
+	}
+	el := c.order.PushBack(ent)
+	c.data[key] = el
+	c.bytes += len(body)
+	c.evictLocked()
+}
+
+func (c *MediaCache) removeLocked(el *list.Element) {
+	ent := el.Value.(*mediaEntry)
+	c.order.Remove(el)
+	delete(c.data, ent.key)
+	c.bytes -= len(ent.body)
+}
+
+func (c *MediaCache) evictLocked() {
+	for len(c.data) > c.maxItems || c.bytes > c.maxBytes {
+		front := c.order.Front()
+		if front == nil {
+			break
+		}
+		c.removeLocked(front)
+	}
+}
+
+// Fetch downloads (or returns cached) a Steam preview image.
+// httpClient should already honour --proxy when set; it is never mutated.
+func (c *MediaCache) Fetch(httpClient *http.Client, rawURL string) (body []byte, contentType string, err error) {
 	cleaned, err := ValidateMediaURL(rawURL)
 	if err != nil {
 		return nil, "", err
+	}
+	if body, ctype, ok := c.get(cleaned); ok {
+		return body, ctype, nil
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 
-	mediaSem <- struct{}{}
-	defer func() { <-mediaSem }()
+	c.sem <- struct{}{}
+	defer func() { <-c.sem }()
 
-	req, err := http.NewRequest(http.MethodGet, cleaned, nil)
+	// Another fetcher may have filled the cache while we waited on the semaphore.
+	if body, ctype, ok := c.get(cleaned); ok {
+		return body, ctype, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), mediaTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cleaned, nil)
 	if err != nil {
 		return nil, "", err
 	}
 	req.Header.Set("User-Agent", "swd-web-media/1.0")
 	req.Header.Set("Accept", "image/*,*/*;q=0.8")
 
-	client := *httpClient
-	client.Timeout = mediaTimeout
-
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch failed: %w", err)
 	}
@@ -123,7 +225,16 @@ func FetchMedia(httpClient *http.Client, rawURL string) (body []byte, contentTyp
 	if len(data) > maxMediaBytes {
 		return nil, "", fmt.Errorf("media exceeds %d bytes", maxMediaBytes)
 	}
+	c.put(cleaned, data, ctype)
 	return data, ctype, nil
+}
+
+// defaultMediaCache serves FetchMedia for tests and simple callers.
+var defaultMediaCache = NewMediaCache()
+
+// FetchMedia downloads a Steam preview (process-wide cache + concurrency limit).
+func FetchMedia(httpClient *http.Client, rawURL string) (body []byte, contentType string, err error) {
+	return defaultMediaCache.Fetch(httpClient, rawURL)
 }
 
 // MediaProxyPath is the relative path for the media route.
@@ -132,7 +243,6 @@ func MediaProxyPath(originalURL string) string {
 }
 
 // DisplayPreviewURL returns what HTML <img src> should use.
-// When proxyURL is set, rewrite to local media proxy so the browser never hits Steam CDNs directly.
 func DisplayPreviewURL(originalURL, proxyURL string) string {
 	if originalURL == "" {
 		return ""
@@ -145,4 +255,3 @@ func DisplayPreviewURL(originalURL, proxyURL string) string {
 	}
 	return MediaProxyPath(originalURL)
 }
-

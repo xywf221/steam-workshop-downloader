@@ -5,4 +5,4 @@ package version
 const AppName = "Steam Workshop Downloader"
 
 // Version is the semver for the Go rewrite. Override via -ldflags at release.
-var Version = "6.1.0"
+var Version = "6.1.1"

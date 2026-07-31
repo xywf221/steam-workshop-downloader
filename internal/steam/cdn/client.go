@@ -26,11 +26,15 @@ type Client struct {
 	Log    *ui.Log
 	Servers *ServerList
 
-	mu        sync.Mutex
-	depotKeys map[uint32][]byte
+	mu         sync.Mutex
+	depotKeys  map[uint32][]byte
 	chunkCache map[string][]byte // depotID/chunkSHA -> plain
-	ioMu      sync.Mutex         // serialise chunk decrypt+decompress if needed by caller
+	cacheBytes int
 }
+
+// Cap in-memory chunk cache so multi-item sessions do not grow without bound.
+const maxChunkCacheBytes = 64 << 20 // 64 MiB
+
 
 // New builds a CDN client. httpClient should share the proxy dialer with CM.
 func New(steam *cm.Client, httpClient *http.Client, log *ui.Log) *Client {
@@ -259,17 +263,7 @@ func (c *Client) GetChunk(ctx context.Context, appID, depotID uint32, chunkID st
 	}
 	c.mu.Unlock()
 
-	c.ioMu.Lock()
-	defer c.ioMu.Unlock()
-
-	// double-check after lock
-	c.mu.Lock()
-	if data, ok := c.chunkCache[cacheKey]; ok {
-		c.mu.Unlock()
-		return data, nil
-	}
-	c.mu.Unlock()
-
+	// Parallel-safe: HTTP + crypto are re-entrant; DLL decompress has its own mutex.
 	raw, err := c.cdnGET(ctx, fmt.Sprintf("depot/%d/chunk/%s", depotID, chunkID))
 	if err != nil {
 		return nil, err
@@ -290,7 +284,20 @@ func (c *Client) GetChunk(ctx context.Context, appID, depotID uint32, chunkID st
 		return nil, fmt.Errorf("chunk decompress: %w", err)
 	}
 	c.mu.Lock()
-	c.chunkCache[cacheKey] = data
+	if _, ok := c.chunkCache[cacheKey]; !ok {
+		// Drop arbitrary entries when over budget (map iteration order is fine).
+		for c.cacheBytes+len(data) > maxChunkCacheBytes && len(c.chunkCache) > 0 {
+			for k, v := range c.chunkCache {
+				c.cacheBytes -= len(v)
+				delete(c.chunkCache, k)
+				break
+			}
+		}
+		if c.cacheBytes+len(data) <= maxChunkCacheBytes {
+			c.chunkCache[cacheKey] = data
+			c.cacheBytes += len(data)
+		}
+	}
 	c.mu.Unlock()
 	return data, nil
 }
