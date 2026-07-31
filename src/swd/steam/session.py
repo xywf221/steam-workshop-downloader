@@ -3,8 +3,26 @@
 from __future__ import annotations
 
 from swd.steam.patch import apply_steam_patches
-from swd.steam.proxy import setup_proxy
+from swd.steam.proxy import parse_proxy_url, setup_proxy
 from swd.ui.log import Log
+
+# anonymous_login is a single CM attempt; channel encrypt often needs a few
+# TryAnotherCM rotations when the exit path is flaky or filters CM peers.
+_ANON_LOGIN_ATTEMPTS = 5
+
+
+def _eresult_label(value: object) -> str:
+    """Best-effort ``EResult`` name for logs (never raises)."""
+    try:
+        from steam.enums import EResult
+
+        er = EResult(value)
+        name = getattr(er, "name", None)
+        if name:
+            return f"{int(er)} {name}"
+        return str(int(er))
+    except Exception:
+        return repr(value)
 
 
 def init_session(proxy_url: str | None, log: Log) -> tuple[object | None, object | None]:
@@ -16,17 +34,61 @@ def init_session(proxy_url: str | None, log: Log) -> tuple[object | None, object
     if proxy_url is not None:
         # Also patches Steam CM TCP (gevent) — without that, QueryFiles /
         # GetDetails would still go direct while only CDN HTTP used the proxy.
-        setup_proxy(proxy_url)
-        log.dim(f"  Proxy wired for CM + CDN + media: {proxy_url}")
+        parsed = setup_proxy(proxy_url)
+        auth = "auth=yes" if parsed.username else "auth=no"
+        log.dim(f"  Proxy wired for CM + CDN + media: {parsed.redacted_url()} ({auth})")
     apply_steam_patches()
 
     from steam.client import SteamClient
     from steam.client.cdn import CDNClient
+    from steam.enums import EResult
 
     log.stage("INIT", "Connecting to Steam...")
     client = SteamClient()
-    if client.anonymous_login() != 1:
-        log.err("Login failed")
+    last: object | None = None
+    for attempt in range(1, _ANON_LOGIN_ATTEMPTS + 1):
+        result = client.anonymous_login()
+        last = result
+        if result == EResult.OK:
+            break
+        label = _eresult_label(result)
+        if attempt < _ANON_LOGIN_ATTEMPTS and result in (
+            EResult.TryAnotherCM,
+            EResult.Fail,
+            EResult.Timeout,
+            EResult.ServiceUnavailable,
+        ):
+            log.warn(
+                f"Anonymous login attempt {attempt}/{_ANON_LOGIN_ATTEMPTS} "
+                f"failed ({label}); trying another CM..."
+            )
+            try:
+                if getattr(client, "connected", False):
+                    client.disconnect()
+            except Exception:
+                pass
+            continue
+        break
+    else:
+        result = last
+
+    if result != EResult.OK:
+        log.err(f"Login failed ({_eresult_label(result)})")
+        if proxy_url is not None:
+            # Common failure mode with "web-only" SOCKS exits: TCP CONNECT to
+            # CM :27017 succeeds (or appears to), then the reader sees EOF
+            # before ChannelEncryptRequest — steam reports TryAnotherCM.
+            try:
+                p = parse_proxy_url(proxy_url)
+                hint_host = p.host
+            except Exception:
+                hint_host = "proxy"
+            log.dim(
+                "  Hint: credentials in --proxy are parsed; this usually means "
+                f"the exit ({hint_host}) cannot complete Steam CM on TCP 27017 "
+                "(web-only / port-filtered proxies often break here). "
+                "Use a full-cone SOCKS that allows arbitrary TCP, not HTTPS-only."
+            )
         return None, None
     log.ok(f"Logged on ({client.steam_id})")
 

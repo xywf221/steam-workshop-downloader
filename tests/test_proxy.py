@@ -24,6 +24,25 @@ from swd.steam.proxy import parse_proxy_url
             "alice",
             "secret",
         ),
+        # SOCKS5 username/password auth (same userinfo form as HTTP)
+        (
+            "socks5://jp:a5472118@192.168.1.5:2260",
+            "socks5",
+            "SOCKS5",
+            "192.168.1.5",
+            2260,
+            "jp",
+            "a5472118",
+        ),
+        (
+            "socks5h://bob:p%40ss@proxy.example:1080",
+            "socks5h",
+            "SOCKS5",
+            "proxy.example",
+            1080,
+            "bob",
+            "p%40ss",
+        ),
         ("http://onlyuser@proxy:8080", "http", "HTTP", "proxy", 8080, "onlyuser", None),
         ("5.6.7.8:9100", "socks5", "SOCKS5", "5.6.7.8", 9100, None, None),
         # Upper-case scheme is fine
@@ -39,6 +58,14 @@ def test_parse_proxy_url_valid(url, scheme, proto, host, port, user, pw) -> None
     assert p.username == user
     assert p.password == pw
     assert p.rdns is True
+
+
+def test_redacted_url_hides_password() -> None:
+    p = parse_proxy_url("socks5://jp:a5472118@192.168.1.5:2260")
+    assert p.redacted_url() == "socks5://jp:***@192.168.1.5:2260"
+    assert "a5472118" not in p.redacted_url()
+    bare = parse_proxy_url("socks5://1.2.3.4:1080")
+    assert bare.redacted_url() == "socks5://1.2.3.4:1080"
 
 
 @pytest.mark.parametrize(
@@ -105,6 +132,15 @@ def test_setup_proxy_uses_pysocks(monkeypatch) -> None:
     assert captured["username"] == "alice"
     assert captured["password"] == "secret"
     assert parsed.username == "alice"
+
+    captured.clear()
+    parsed = proxy_mod.setup_proxy("socks5://jp:a5472118@192.168.1.5:2260")
+    assert captured["proto"] == FakeSocks.SOCKS5
+    assert captured["host"] == "192.168.1.5"
+    assert captured["port"] == 2260
+    assert captured["username"] == "jp"
+    assert captured["password"] == "a5472118"
+    assert parsed.redacted_url() == "socks5://jp:***@192.168.1.5:2260"
 
 
 def test_patch_steam_cm_tcp_replaces_connect(monkeypatch) -> None:

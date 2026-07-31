@@ -45,7 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--proxy",
         metavar="URL",
         default=None,
-        help="optional proxy for Steam CM (same schemes as swd --proxy)",
+        help="optional proxy for Steam CM / CDN / media "
+        "(same schemes + user:pass@ as swd --proxy; needs full TCP, not HTTPS-only)",
     )
     p.add_argument(
         "--debug",
@@ -83,7 +84,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     log.stage("WEB", f"Starting {APP_NAME} web UI on http://{args.host}:{args.port}")
     log.dim(f"  Download dir: {output}")
     if args.proxy:
-        log.info(f"Proxy: {args.proxy}")
+        from swd.steam.proxy import parse_proxy_url
+
+        try:
+            parsed = parse_proxy_url(args.proxy)
+            auth = "auth=yes" if parsed.username else "auth=no"
+            log.info(f"Proxy: {parsed.redacted_url()} ({auth})")
+        except ValueError as e:
+            log.warn(f"Proxy URL looks invalid ({e}); Steam setup will re-check")
+            log.info(f"Proxy: {args.proxy}")
 
     from swd.web.app import create_app
 

@@ -76,7 +76,9 @@ swd 294100 3683834622 -v
 swd 294100 3683834622 --retries 10
 
 # Route outbound connections through a proxy (default: direct)
+# Needs full TCP (Steam CM uses :27017) — HTTPS-only / web-only SOCKS will fail login.
 swd 294100 3683834622 --proxy socks5://127.0.0.1:1080
+swd 294100 3683834622 --proxy socks5://user:pass@192.168.1.5:1080
 swd 294100 3683834622 --proxy http://user:pass@proxy:8080
 
 # Pipe-friendly output (no ANSI)

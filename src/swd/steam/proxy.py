@@ -48,6 +48,17 @@ class ParsedProxy:
     scheme: str = ""
     original: str = ""
 
+    def redacted_url(self) -> str:
+        """Return a log-safe URL with the password replaced by ``***``."""
+        auth = ""
+        if self.username:
+            auth = self.username
+            if self.password is not None:
+                auth += ":***"
+            auth += "@"
+        scheme = self.scheme or "socks5"
+        return f"{scheme}://{auth}{self.host}:{self.port}"
+
 
 def parse_proxy_url(url: str) -> ParsedProxy:
     """Parse a proxy URL into a :class:`ParsedProxy`.
@@ -65,8 +76,8 @@ def parse_proxy_url(url: str) -> ParsedProxy:
     bare ``host:port``  SOCKS5
     ===============  =======================================================
 
-    For HTTP/HTTPS proxies, ``user:password@`` is split out and forwarded as
-    basic-auth on the CONNECT request.
+    ``user:password@`` is accepted for **all** schemes and forwarded to
+    pysocks (SOCKS5 username/password auth, or HTTP CONNECT basic-auth).
     """
     raw = url.strip()
     m = _SCHEME_RE.match(raw)
@@ -83,7 +94,7 @@ def parse_proxy_url(url: str) -> ParsedProxy:
             "(expected socks5://, socks4://, or http(s)://)"
         )
 
-    # Split userinfo (only meaningful for HTTP CONNECT).
+    # Split userinfo for SOCKS5 auth and HTTP CONNECT basic-auth.
     user: str | None = None
     password: str | None = None
     if "@" in rest:
@@ -103,6 +114,9 @@ def parse_proxy_url(url: str) -> ParsedProxy:
         port_num = int(port)
     except ValueError as e:
         raise ValueError(f"Invalid proxy port in {url!r}: {port!r}") from e
+
+    if not host:
+        raise ValueError(f"Invalid proxy URL {url!r}: empty host")
 
     return ParsedProxy(
         proto_attr=_PROTOCOL_BY_SCHEME[scheme],

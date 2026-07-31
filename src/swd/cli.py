@@ -41,7 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Proxy URL. Scheme selects protocol: socks5:// or socks5h:// "
         "(SOCKS5, default if scheme omitted), socks4:// (SOCKS4), "
         "http:// or https:// (HTTP CONNECT). "
-        "Example: http://user:pass@127.0.0.1:8080. "
+        "Optional userinfo works for SOCKS5 and HTTP: "
+        "socks5://user:pass@host:1080 or http://user:pass@host:8080. "
+        "Needs full TCP (Steam CM uses port 27017), not HTTPS-only. "
         "If omitted, no proxy is used (direct connection).",
     )
     p.add_argument(
@@ -108,7 +110,16 @@ def cmd_swd(argv: Sequence[str] | None = None) -> int:
         output = Path(args.output).resolve()
         log.info(f"=== {APP_NAME} v{VERSION} ===")
         log.dim(f"  AppID: {args.appid}, IDs: {', '.join(str(w) for w in args.workshopid)}")
-        log.dim(f"  Proxy: {proxy_url or '(direct connection)'}")
+        if proxy_url:
+            from swd.steam.proxy import parse_proxy_url
+
+            try:
+                proxy_label = parse_proxy_url(proxy_url).redacted_url()
+            except ValueError:
+                proxy_label = proxy_url
+        else:
+            proxy_label = "(direct connection)"
+        log.dim(f"  Proxy: {proxy_label}")
         log.dim(f"  Output: {output}")
         log.dim(f"  Retries per file: {args.retries}")
         jobs_label = (
