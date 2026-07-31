@@ -1,8 +1,31 @@
 # Steam Workshop Downloader
 
-Pure-Python offline downloader for Steam Workshop items. No `steamcmd`
-subprocess — talks the Steam protocol directly via [`steam`][steam-pypi]
-and uses `ctypes` against `steamclient64.dll` for chunk decompression.
+Offline downloader for Steam Workshop items. No `steamcmd` subprocess.
+
+## Go rewrite (branch `rewrite/go-kong`, preferred)
+
+First-party Steam protocol stack in Go (no ValvePython, no monkey-patches) +
+[Kong](https://github.com/alecthomas/kong) CLI. Windows uses `steamclient64.dll`
+for VSZa chunk decompression (same RVAs as the Python path).
+
+```bash
+go build -o swd.exe ./cmd/swd
+./swd.exe version
+./swd.exe download 294100 3683834622 -o ./downloads
+./swd.exe download 294100 3683834622 --proxy socks5://user:pass@host:1080
+# legacy positional form still works:
+./swd.exe 294100 3683834622
+```
+
+`swd web` is phase 2 (not implemented yet). Place `steamclient64.dll`,
+`tier0_s64.dll`, and `vstdlib_s64.dll` next to the binary (or set
+`SWD_STEAMCLIENT_DLL`).
+
+## Python (legacy)
+
+Pure-Python offline downloader for Steam Workshop items. Talks the Steam
+protocol via [`steam`][steam-pypi] and uses `ctypes` against
+`steamclient64.dll` for chunk decompression.
 
 ```bash
 pip install swd

@@ -4,6 +4,7 @@ package steam
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/xywf221/steam-workshop-downloader/internal/proxy"
@@ -86,6 +87,17 @@ func (s *Session) Close() {
 	if s != nil && s.CM != nil {
 		s.CM.Disconnect()
 	}
+}
+
+// HTTP returns the session's HTTP client (honours --proxy when set).
+func (s *Session) HTTP() *http.Client {
+	if s == nil || s.CM == nil {
+		return http.DefaultClient
+	}
+	if s.CM.HTTP != nil {
+		return s.CM.HTTP
+	}
+	return http.DefaultClient
 }
 
 // DefaultInitTimeout is used when the caller passes a context without deadline.

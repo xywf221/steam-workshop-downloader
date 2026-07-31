@@ -1,0 +1,222 @@
+// Package workshop implements PublishedFile GetDetails and collection expansion.
+package workshop
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/xywf221/steam-workshop-downloader/internal/steam/cm"
+	"github.com/xywf221/steam-workshop-downloader/internal/steam/pb"
+	"github.com/xywf221/steam-workshop-downloader/internal/ui"
+)
+
+const (
+	// FileTypeCollection is EWorkshopFileType.Collection.
+	FileTypeCollection = 2
+	// BatchSize matches Python PUBLISHED_FILE_BATCH.
+	BatchSize = 100
+	// UMTimeout is the per-call budget (Python UM_TIMEOUT).
+	UMTimeout = 30 * time.Second
+)
+
+// Item is one published file (download-oriented fields).
+type Item struct {
+	ID            uint64
+	Title         string
+	FileType      uint32
+	ConsumerAppID uint32
+	HContentFile  uint64 // SteamPipe manifest gid; 0 if not on SteamPipe
+	FileSize      uint64
+	Children      []uint64
+	Result        uint32
+}
+
+// GetDetails fetches PublishedFile.GetDetails for the given ids.
+func GetDetails(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool, log *ui.Log) ([]Item, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []Item
+	for start := 0; start < len(ids); start += BatchSize {
+		end := start + BatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch := ids[start:end]
+		items, err := getDetailsBatch(ctx, client, batch, includeChildren)
+		if err != nil {
+			if log != nil {
+				log.Err(fmt.Sprintf("Failed to resolve batch %v: %v", batch, err))
+			}
+			continue
+		}
+		out = append(out, items...)
+	}
+	return out, nil
+}
+
+func getDetailsBatch(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool) ([]Item, error) {
+	var enc pb.Encoder
+	for _, id := range ids {
+		enc.Fixed64Field(1, id) // publishedfileids repeated fixed64
+	}
+	enc.BoolField(2, false)           // includetags
+	enc.BoolField(3, false)           // includeadditionalpreviews
+	enc.BoolField(4, includeChildren) // includechildren
+	enc.BoolField(5, false)           // includekvtags
+	enc.BoolField(6, false)           // includevotes
+	enc.BoolField(8, true)            // short_description
+	enc.BoolField(10, false)          // includeforsaledata
+	enc.BoolField(11, false)          // includemetadata
+	enc.VarintField(12, 0)            // language
+
+	_, body, err := client.SendUM(ctx, "PublishedFile.GetDetails#1", enc.Bytes(), UMTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return parseGetDetailsResponse(body)
+}
+
+func parseGetDetailsResponse(body []byte) ([]Item, error) {
+	fields, err := pb.Decode(body)
+	if err != nil {
+		return nil, err
+	}
+	var items []Item
+	for _, f := range fields {
+		if f.Number != 1 || f.Wire != pb.WireBytes { // publishedfiledetails
+			continue
+		}
+		it, err := parsePublishedFileDetails(f.Bytes)
+		if err != nil {
+			continue
+		}
+		items = append(items, it)
+	}
+	return items, nil
+}
+
+func parsePublishedFileDetails(data []byte) (Item, error) {
+	fields, err := pb.Decode(data)
+	if err != nil {
+		return Item{}, err
+	}
+	var it Item
+	for _, f := range fields {
+		switch f.Number {
+		case 1: // result uint32
+			it.Result = uint32(f.Varint)
+		case 2: // publishedfileid fixed64/uint64
+			if f.Wire == pb.WireFixed64 {
+				it.ID = f.Fixed64
+			} else {
+				it.ID = f.Varint
+			}
+		case 5: // consumer_appid
+			it.ConsumerAppID = uint32(f.Varint)
+		case 8: // file_size uint64
+			if f.Wire == pb.WireFixed64 {
+				it.FileSize = f.Fixed64
+			} else {
+				it.FileSize = f.Varint
+			}
+		case 14: // hcontent_file fixed64
+			if f.Wire == pb.WireFixed64 {
+				it.HContentFile = f.Fixed64
+			} else {
+				it.HContentFile = f.Varint
+			}
+		case 16: // title
+			it.Title = string(f.Bytes)
+		case 34: // file_type
+			it.FileType = uint32(f.Varint)
+		case 53: // children message
+			if f.Wire == pb.WireBytes {
+				if cid := parseChildID(f.Bytes); cid != 0 {
+					it.Children = append(it.Children, cid)
+				}
+			}
+		}
+	}
+	if it.ID == 0 {
+		return Item{}, fmt.Errorf("missing publishedfileid")
+	}
+	return it, nil
+}
+
+func parseChildID(data []byte) uint64 {
+	fields, err := pb.Decode(data)
+	if err != nil {
+		return 0
+	}
+	for _, f := range fields {
+		if f.Number == 1 {
+			if f.Wire == pb.WireFixed64 {
+				return f.Fixed64
+			}
+			return f.Varint
+		}
+	}
+	return 0
+}
+
+// ResolveIDs expands collections recursively and returns downloadable item IDs
+// (order-preserving, de-duplicated).
+func ResolveIDs(ctx context.Context, client *cm.Client, ids []uint64, log *ui.Log) ([]uint64, error) {
+	// de-dupe input preserving order
+	seenIn := make(map[uint64]struct{})
+	var unique []uint64
+	for _, id := range ids {
+		if _, ok := seenIn[id]; ok {
+			continue
+		}
+		seenIn[id] = struct{}{}
+		unique = append(unique, id)
+	}
+
+	var resolved []uint64
+	seenOut := make(map[uint64]struct{})
+
+	var walk func([]uint64) error
+	walk = func(batch []uint64) error {
+		items, err := GetDetails(ctx, client, batch, true, log)
+		if err != nil {
+			return err
+		}
+		for _, it := range items {
+			if it.Result != 0 && it.Result != cm.EResultOK {
+				if log != nil {
+					log.Warn(fmt.Sprintf("failed to get details for %d (result=%d), skipping", it.ID, it.Result))
+				}
+				continue
+			}
+			title := it.Title
+			if title == "" {
+				title = fmt.Sprintf("%d", it.ID)
+			}
+			if it.FileType == FileTypeCollection {
+				if log != nil {
+					log.Info(fmt.Sprintf("  '%s' is a collection, %d items", title, len(it.Children)))
+				}
+				if len(it.Children) > 0 {
+					if err := walk(it.Children); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+			if _, ok := seenOut[it.ID]; ok {
+				continue
+			}
+			seenOut[it.ID] = struct{}{}
+			resolved = append(resolved, it.ID)
+		}
+		return nil
+	}
+
+	if err := walk(unique); err != nil {
+		return resolved, err
+	}
+	return resolved, nil
+}

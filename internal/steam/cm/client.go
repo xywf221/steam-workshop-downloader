@@ -439,6 +439,108 @@ func (c *Client) SendMsgProto(m *protocol.MsgProto) error {
 	return c.sendRaw(m.Serialize(), true)
 }
 
+// nextJobID allocates a source job id (1..9999 cycling, matching ValvePython).
+func (c *Client) nextJobID() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id := c.nextJob
+	c.nextJob++
+	if c.nextJob > 9999 || c.nextJob == 0 {
+		c.nextJob = 1
+	}
+	return id
+}
+
+// SendJob sends a protobuf message as a job and returns the source job id.
+func (c *Client) SendJob(m *protocol.MsgProto) (uint64, error) {
+	jobID := c.nextJobID()
+	m.Header.JobIDSource = jobID
+	if err := c.SendMsgProto(m); err != nil {
+		return 0, err
+	}
+	return jobID, nil
+}
+
+// WaitJob waits for a response whose header.jobid_target matches jobID.
+func (c *Client) WaitJob(ctx context.Context, jobID uint64, timeout time.Duration) (*protocol.MsgProto, error) {
+	ch := make(chan packet, 1)
+	c.mu.Lock()
+	c.jobWaiters[jobID] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.jobWaiters, jobID)
+		c.mu.Unlock()
+	}()
+
+	tctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	select {
+	case <-tctx.Done():
+		return nil, tctx.Err()
+	case pkt, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("connection closed waiting for job %d", jobID)
+		}
+		if pkt.mp == nil {
+			return nil, fmt.Errorf("job %d response not protobuf", jobID)
+		}
+		return pkt.mp, nil
+	}
+}
+
+// SendJobAndWait sends a job and waits for the matching response.
+func (c *Client) SendJobAndWait(ctx context.Context, m *protocol.MsgProto, timeout time.Duration) (*protocol.MsgProto, error) {
+	jobID, err := c.SendJob(m)
+	if err != nil {
+		return nil, err
+	}
+	return c.WaitJob(ctx, jobID, timeout)
+}
+
+// SendUM sends a Unified Message (ServiceMethodCallFromClient) and waits for the response body.
+// method is e.g. "PublishedFile.GetDetails#1". body is the already-serialized request protobuf.
+// Returns (header EResult, response body bytes, error).
+func (c *Client) SendUM(ctx context.Context, method string, body []byte, timeout time.Duration) (int32, []byte, error) {
+	const umRetries = 3
+	var last error
+	for attempt := 1; attempt <= umRetries; attempt++ {
+		if !c.LoggedOn() {
+			if err := c.ConnectAndLogin(ctx, 3); err != nil {
+				last = err
+				continue
+			}
+		}
+		mp := &protocol.MsgProto{
+			Msg: protocol.EMsgServiceMethodCallFromClient,
+			Header: protocol.ProtoBufHeader{
+				TargetJobName: method,
+			},
+			Body: body,
+		}
+		resp, err := c.SendJobAndWait(ctx, mp, timeout)
+		if err != nil {
+			last = err
+			c.logf("UM %s attempt %d/%d: %v", method, attempt, umRetries, err)
+			continue
+		}
+		er := resp.Header.EResult
+		if er != 0 && er != EResultOK {
+			last = &LoginError{EResult: int(er), Msg: fmt.Sprintf("UM %s failed: %s", method, resp.Header.ErrorMessage)}
+			// soft retry on timeout-ish
+			if er == EResultFail || er == EResultTimeout || er == EResultServiceUnavailable || er == EResultTryAnotherCM {
+				continue
+			}
+			return er, resp.Body, last
+		}
+		return EResultOK, resp.Body, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("UM %s failed", method)
+	}
+	return 0, nil, last
+}
+
 func (c *Client) sendRaw(payload []byte, encryptOK bool) error {
 	c.mu.Lock()
 	conn := c.conn
@@ -555,10 +657,23 @@ func (c *Client) dispatch(msg []byte) {
 		pkt.msg = m
 	}
 
-	// Multi: unpack later if needed — for login path encrypt msgs are not multi.
 	if emsg == protocol.EMsgMulti && pkt.mp != nil {
 		c.handleMulti(pkt.mp.Body)
 		return
+	}
+
+	// Job responses: match jobid_target to a waiter.
+	if pkt.mp != nil && pkt.mp.Header.JobIDTarget != 0 && pkt.mp.Header.JobIDTarget != protocol.JobIDNone {
+		c.mu.Lock()
+		jch := c.jobWaiters[pkt.mp.Header.JobIDTarget]
+		c.mu.Unlock()
+		if jch != nil {
+			select {
+			case jch <- pkt:
+			default:
+			}
+			return
+		}
 	}
 
 	c.mu.Lock()

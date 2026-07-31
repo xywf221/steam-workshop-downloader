@@ -3,10 +3,40 @@
 ## Overview
 
 **Steam Workshop Downloader (`swd`)** — downloads Steam Workshop items
-without launching `steamcmd.exe`. Uses `ValvePython/steam` for the Steam
-protocol and `ctypes` to call `steamclient64.dll` for VSZa chunk
-decompression. Packaged as a real installable Python package with
-console script, tests, and CI.
+without launching `steamcmd.exe`.
+
+### Go rewrite (current, branch `rewrite/go-kong`)
+
+First-party Steam protocol in Go + Kong CLI. **No third-party Steam lib,
+no monkey-patches.**
+
+```
+cmd/swd/                Kong entry (download / web stub / version)
+internal/
+  cli/                  Kong commands
+  proxy/                URL parse + SOCKS4/5/HTTP dialer
+  steam/
+    cm/                 CM TCP, channel encrypt, anon login, jobs, UM
+    crypto/             AES + RSA-OAEP (ValvePython-compatible)
+    protocol/           VT01 frames, Msg/MsgProto, minimal protobuf
+    pb/                 generic protobuf wire helpers
+    workshop/           GetDetails + collection resolve
+    cdn/                content servers, depot key, manifest, chunks
+    manifest/           depot manifest parse/decrypt
+    session.go          InitSession façade
+  dll/                  steamclient64.dll RVA decompress (Windows)
+  chunkcodec/           DLL-first decompress + pure fallbacks
+  download/             per-item skip/retry/jobs
+  ui/ util/ version/
+```
+
+Python under `src/swd/` remains until golden parity soak, then archive.
+
+### Python (legacy)
+
+Uses `ValvePython/steam` for the Steam protocol and `ctypes` to call
+`steamclient64.dll` for VSZa chunk decompression. Packaged as an
+installable Python package with console script, tests, and CI.
 
 ## Repository layout
 
