@@ -270,9 +270,13 @@ func (m *Manifest) DecryptFilenames(depotKey []byte) error {
 	return nil
 }
 
-// CleanName converts a Steam filename (backslash, trailing NULs) to a slash path.
+// CleanName converts a Steam filename (backslash, embedded NULs) to a slash path.
 func CleanName(name string) string {
-	name = strings.TrimRight(name, "\x00 \n\t")
+	// Steam often stores C-strings with trailing NULs inside protobuf bytes.
+	if i := strings.IndexByte(name, 0); i >= 0 {
+		name = name[:i]
+	}
+	name = strings.TrimSpace(name)
 	name = strings.ReplaceAll(name, "\\", "/")
 	return path.Clean(name)
 }

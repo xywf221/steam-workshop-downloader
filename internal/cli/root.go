@@ -37,7 +37,7 @@ type WebCmd struct {
 
 // Run implements kong Runner.
 func (c *WebCmd) Run() error {
-	return fmt.Errorf("swd web is not implemented yet (phase 2); use Python swd-web for now, or wait for the Go web UI")
+	return fmt.Errorf("swd web is not implemented yet (phase 2)")
 }
 
 // Run parses argv and executes the selected subcommand.

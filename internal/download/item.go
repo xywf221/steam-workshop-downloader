@@ -202,7 +202,7 @@ func downloadOneFile(
 			n = fi.Size()
 		}
 		if verbose && log != nil {
-			log.Dim(fmt.Sprintf("  skip %s", f.Filename))
+			log.Dim(fmt.Sprintf("  skip %s", manifest.CleanName(f.Filename)))
 		}
 		return "skipped", n, nil
 	}
@@ -219,7 +219,7 @@ func downloadOneFile(
 			if attempt < retries {
 				wait := util.ComputeBackoff(attempt, 30)
 				if log != nil {
-					log.Retry(fmt.Sprintf("%s (%d/%d): %v; wait %ds", f.Filename, attempt, retries, err, wait))
+					log.Retry(fmt.Sprintf("%s (%d/%d): %v; wait %ds", manifest.CleanName(f.Filename), attempt, retries, err, wait))
 				}
 				time.Sleep(time.Duration(wait) * time.Second)
 				continue
@@ -230,8 +230,9 @@ func downloadOneFile(
 			last = err
 			break
 		}
+		name := manifest.CleanName(f.Filename)
 		if verbose && log != nil {
-			log.Dim(fmt.Sprintf("  ok %s (%s)", f.Filename, util.FormatSize(int64(len(data)))))
+			log.Dim(fmt.Sprintf("  ok %s (%s)", name, util.FormatSize(int64(len(data)))))
 		}
 		return "downloaded", int64(len(data)), nil
 	}
@@ -240,7 +241,7 @@ func downloadOneFile(
 		last = fmt.Errorf("download failed")
 	}
 	if log != nil {
-		log.Err(fmt.Sprintf("%s: %v", f.Filename, last))
+		log.Err(fmt.Sprintf("%s: %v", manifest.CleanName(f.Filename), last))
 	}
 	return "failed", 0, last
 }
