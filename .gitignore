@@ -7,6 +7,9 @@ test_output/
 build/
 dist/
 *.egg-info/
+*.exe
+/swd
+/swd.exe
 
 # Virtual environments
 .venv/
