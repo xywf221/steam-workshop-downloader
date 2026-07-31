@@ -49,9 +49,15 @@ func TestVersionCmd(t *testing.T) {
 	}
 }
 
-func TestWebStub(t *testing.T) {
-	err := (&WebCmd{}).Run()
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("expected not implemented, got %v", err)
+func TestWebCmdDefaults(t *testing.T) {
+	// Kong-populated defaults are not applied when constructing WebCmd{} directly.
+	c := &WebCmd{Host: "127.0.0.1", Port: 8765, Output: "."}
+	if c.Port != 8765 || c.Host != "127.0.0.1" {
+		t.Fatalf("unexpected defaults: %+v", c)
+	}
+	// Invalid port is rejected without binding.
+	err := (&WebCmd{Port: -1, Output: "."}).Run()
+	if err == nil || !strings.Contains(err.Error(), "port") {
+		t.Fatalf("expected port error, got %v", err)
 	}
 }

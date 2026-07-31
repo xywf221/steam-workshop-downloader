@@ -14,7 +14,7 @@ import (
 // CLI is the root Kong grammar.
 type CLI struct {
 	Download DownloadCmd `cmd:"" help:"Download Steam Workshop items"`
-	Web      WebCmd      `cmd:"" help:"Workshop browse / download web UI (phase 2)"`
+	Web      WebCmd      `cmd:"" help:"Workshop browse / search / download web UI"`
 	Version  VersionCmd  `cmd:"" help:"Print version and exit"`
 }
 
@@ -25,19 +25,6 @@ type VersionCmd struct{}
 func (c *VersionCmd) Run() error {
 	fmt.Printf("%s %s\n", version.AppName, version.Version)
 	return nil
-}
-
-// WebCmd is a phase-2 stub.
-type WebCmd struct {
-	Host   string `default:"127.0.0.1" help:"Bind host"`
-	Port   int    `default:"8765" help:"Bind port"`
-	Output string `short:"o" default:"." help:"Download directory"`
-	Proxy  string `help:"Optional proxy URL (socks5/socks4/http)"`
-}
-
-// Run implements kong Runner.
-func (c *WebCmd) Run() error {
-	return fmt.Errorf("swd web is not implemented yet (phase 2)")
 }
 
 // Run parses argv and executes the selected subcommand.

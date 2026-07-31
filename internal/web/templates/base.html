@@ -1,0 +1,41 @@
+{{define "base"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{block "title" .}}SWD Workshop Browser{{end}}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-left">
+      <a class="brand" href="/">SWD Workshop</a>
+      <span class="tagline">browse · search · download</span>
+    </div>
+    <nav class="header-nav">
+      <a href="/">Browse</a>
+      {{if .DownloadEnabled}}
+      <a href="/downloads">
+        Downloads
+        {{with .ActiveDownloads}}
+        <span class="nav-badge">{{.}}</span>
+        {{end}}
+      </a>
+      {{end}}
+    </nav>
+  </header>
+  <main class="container">
+    {{if .DownloadEnabled}}
+    <p class="output-hint">Downloads → <code>{{.DownloadOutput}}</code></p>
+    {{end}}
+    {{block "content" .}}{{end}}
+  </main>
+  <footer class="site-footer">
+    <span>Steam Workshop Downloader</span>
+    <span class="dim">Anonymous Steam session · no API key</span>
+  </footer>
+  {{block "scripts" .}}{{end}}
+</body>
+</html>
+{{end}}

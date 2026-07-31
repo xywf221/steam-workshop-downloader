@@ -34,11 +34,22 @@ func (s Stats) FullyFailed() bool {
 	return s.OK == 0 && s.Skipped == 0 && s.Fail > 0
 }
 
+// Progress receives per-file events during DownloadItem (optional; for web UI).
+type Progress interface {
+	StartFiles(n int)
+	FileOK(filename string, sizeBytes int64)
+	FileSkip(filename string, sizeBytes int64)
+	FileFail(filename string, err error)
+	Retry(filename string, attempt, retries int, err error, backoffS int)
+	EndFiles(stats Stats)
+}
+
 // Options for DownloadItem.
 type Options struct {
-	Retries int // default 5
-	Jobs    int // 0 = auto
-	Verbose bool
+	Retries  int // default 5
+	Jobs     int // 0 = auto
+	Verbose  bool
+	Progress Progress // optional
 }
 
 // DownloadItem fetches one workshop item under outputDir/{workshopID}/.
@@ -116,20 +127,33 @@ func DownloadItem(
 	if log != nil {
 		log.OK(fmt.Sprintf("'%s' - %d files, %d thread%s", stats.Name, n, workers, plural(workers)))
 	}
+	if opts.Progress != nil {
+		opts.Progress.StartFiles(n)
+	}
 
 	var okN, failN, skipN int64
 	var bytesDone int64
 
 	runOne := func(j job) {
-		st, nbytes, err := downloadOneFile(ctx, cdnClient, m, j.file, j.path, opts.Retries, log, opts.Verbose)
+		st, nbytes, err := downloadOneFile(ctx, cdnClient, m, j.file, j.path, opts.Retries, log, opts.Verbose, opts.Progress)
+		name := manifest.CleanName(j.file.Filename)
 		switch st {
 		case "downloaded":
 			atomic.AddInt64(&okN, 1)
 			atomic.AddInt64(&bytesDone, nbytes)
+			if opts.Progress != nil {
+				opts.Progress.FileOK(name, nbytes)
+			}
 		case "skipped":
 			atomic.AddInt64(&skipN, 1)
+			if opts.Progress != nil {
+				opts.Progress.FileSkip(name, nbytes)
+			}
 		default:
 			atomic.AddInt64(&failN, 1)
+			if opts.Progress != nil {
+				opts.Progress.FileFail(name, err)
+			}
 			if err != nil && log != nil && opts.Verbose {
 				log.Err(fmt.Sprintf("%s: %v", j.file.Filename, err))
 			}
@@ -138,6 +162,9 @@ func DownloadItem(
 
 	if n == 0 {
 		stats.Duration = time.Since(t0)
+		if opts.Progress != nil {
+			opts.Progress.EndFiles(stats)
+		}
 		return stats
 	}
 
@@ -175,6 +202,9 @@ func DownloadItem(
 	stats.Skipped = int(skipN)
 	stats.BytesDone = bytesDone
 	stats.Duration = time.Since(t0)
+	if opts.Progress != nil {
+		opts.Progress.EndFiles(stats)
+	}
 	return stats
 }
 
@@ -194,6 +224,7 @@ func downloadOneFile(
 	retries int,
 	log *ui.Log,
 	verbose bool,
+	prog Progress,
 ) (status string, nbytes int64, err error) {
 	if localMatches(path, f) {
 		fi, _ := os.Stat(path)
@@ -220,6 +251,9 @@ func downloadOneFile(
 				wait := util.ComputeBackoff(attempt, 30)
 				if log != nil {
 					log.Retry(fmt.Sprintf("%s (%d/%d): %v; wait %ds", manifest.CleanName(f.Filename), attempt, retries, err, wait))
+				}
+				if prog != nil {
+					prog.Retry(manifest.CleanName(f.Filename), attempt, retries, err, wait)
 				}
 				time.Sleep(time.Duration(wait) * time.Second)
 				continue

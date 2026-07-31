@@ -1,0 +1,130 @@
+{{define "title"}}{{if .Item}}{{index .Item "title"}} — SWD{{else}}Item {{.ItemID}} — SWD{{end}}{{end}}
+{{define "content"}}
+<p class="back"><a href="javascript:history.back()">← Back</a> · <a href="/">Home</a></p>
+
+{{if .Error}}
+  <div class="alert error">{{.Error}}</div>
+{{end}}
+
+{{if .Item}}
+<article class="detail">
+  <div class="detail-preview">
+    {{if index .Item "preview_src"}}
+    <img src="{{index .Item "preview_src"}}" alt="" referrerpolicy="no-referrer">
+    {{else}}
+    <div class="preview-placeholder large">No preview</div>
+    {{end}}
+  </div>
+  <div class="detail-body">
+    <h1>{{index .Item "title"}}</h1>
+    <p class="meta">
+      ID <code>{{index .Item "id"}}</code>
+      {{if index .Item "is_collection"}} · <span class="badge">Collection</span>{{end}}
+      {{if index .Item "banned"}} · <span class="badge bad">Banned</span>{{end}}
+    </p>
+    <div class="stats-row">
+      <span>↓ {{index .Item "subscriptions"}} subs</span>
+      <span>★ {{index .Item "favorited"}} favs</span>
+      <span>👁 {{index .Item "views"}} views</span>
+      {{with index .Item "file_size_human"}}<span>{{.}}</span>{{end}}
+      {{with index .Item "vote_score"}}<span>score {{printf "%.2f" .}}</span>{{end}}
+    </div>
+    {{with index .Item "tags"}}
+    <div class="tags">
+      {{range .}}<span class="tag">{{.}}</span>{{end}}
+    </div>
+    {{end}}
+    {{with index .Item "short_description"}}
+    <div class="description">{{.}}</div>
+    {{end}}
+    <div class="actions">
+      {{if .DownloadEnabled}}
+      <button
+        type="button"
+        class="btn"
+        id="btn-download"
+        data-appid="{{if index .Item "consumer_appid"}}{{index .Item "consumer_appid"}}{{else}}{{.AppID}}{{end}}"
+        data-id="{{index .Item "id"}}"
+        data-title="{{index .Item "title"}}"
+      >Download with SWD</button>
+      <a class="btn btn-ghost" href="/downloads">View progress</a>
+      {{else}}
+      <p class="hint">Start with <code>-o ./downloads</code> to enable local downloads.</p>
+      {{end}}
+      <a class="btn btn-ghost" href="{{index .Item "steam_url"}}" target="_blank" rel="noopener">Steam page</a>
+    </div>
+    <div id="dl-status" class="dl-status" hidden></div>
+    {{if .DownloadEnabled}}
+    <p class="hint">Uses local SWD download (CDN + hash skip) →
+      <code>{{.DownloadOutput}}</code></p>
+    {{end}}
+  </div>
+</article>
+{{end}}
+{{end}}
+{{define "scripts"}}
+{{if and .DownloadEnabled .Item}}
+<script>
+(function () {
+  const btn = document.getElementById("btn-download");
+  const status = document.getElementById("dl-status");
+  if (!btn || !status) return;
+
+  function setStatus(html, cls) {
+    status.hidden = false;
+    status.className = "dl-status" + (cls ? " " + cls : "");
+    status.innerHTML = html;
+  }
+
+  btn.addEventListener("click", async function () {
+    let appid = parseInt(btn.dataset.appid || "0", 10);
+    if (!appid) {
+      const q = new URLSearchParams(location.search).get("appid");
+      appid = parseInt(q || "0", 10);
+    }
+    if (!appid) {
+      const typed = prompt("AppID for this item (e.g. 294100):");
+      appid = parseInt(typed || "0", 10);
+    }
+    if (!appid) {
+      setStatus("A valid AppID is required.", "err");
+      return;
+    }
+    btn.disabled = true;
+    setStatus("Queuing SWD download…");
+    try {
+      const resp = await fetch("/api/downloads", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appid: appid,
+          workshopid: parseInt(btn.dataset.id, 10),
+          title: btn.dataset.title || "",
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        setStatus("Queue failed: " + (data.error || resp.statusText), "err");
+        btn.disabled = false;
+        return;
+      }
+      const n = (data.jobs || []).length;
+      const job = (data.jobs || [])[0];
+      setStatus(
+        "Queued " + n + " job(s)" +
+        (job ? " (" + (job.title || job.workshop_id) + ")" : "") +
+        ' → <a href="/downloads">view progress</a>',
+        "ok"
+      );
+      setTimeout(function () {
+        location.href = "/downloads";
+      }, 600);
+    } catch (e) {
+      setStatus("Queue failed: " + e, "err");
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+{{end}}
+{{end}}

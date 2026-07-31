@@ -1,0 +1,131 @@
+{{define "title"}}{{if .AppID}}App {{.AppID}} — SWD Workshop{{else}}SWD Workshop Browser{{end}}{{end}}
+{{define "content"}}
+<section class="search-panel">
+  <form class="search-form" method="get" action="/">
+    <label>
+      <span>AppID</span>
+      <input type="text" name="appid" value="{{.AppID}}" placeholder="e.g. 294100" required inputmode="numeric">
+    </label>
+    <label class="grow">
+      <span>Search</span>
+      <input type="text" name="q" value="{{.Q}}" placeholder="mod name or keywords (optional)">
+    </label>
+    <label>
+      <span>Sort</span>
+      <select name="sort">
+        <option value="trend" {{if eq .Sort "trend"}}selected{{end}}>Trending</option>
+        <option value="votes" {{if eq .Sort "votes"}}selected{{end}}>Top rated</option>
+        <option value="subscriptions" {{if eq .Sort "subscriptions"}}selected{{end}}>Most subscribed</option>
+        <option value="new" {{if eq .Sort "new"}}selected{{end}}>Newest</option>
+        <option value="search" {{if eq .Sort "search"}}selected{{end}}>Text search</option>
+      </select>
+    </label>
+    <button type="submit">Search</button>
+  </form>
+  <p class="hint">Tip: RimWorld <code>294100</code> · download with <code>swd &lt;appid&gt; &lt;workshopid&gt;</code></p>
+</section>
+
+{{if .Error}}
+  <div class="alert error">{{.Error}}</div>
+{{end}}
+
+{{if and .HasQuery (not .Error)}}
+  <div class="results-meta">
+    <strong>{{.Total}}</strong> result{{if ne .Total 1}}s{{end}}
+    · page {{.Page}} / {{.TotalPages}}
+  </div>
+
+  {{if .Items}}
+  <div class="card-grid">
+    {{range .Items}}
+    <div class="card">
+      <a class="card-main" href="/item/{{index . "id"}}{{if $.AppID}}?appid={{$.AppID}}{{end}}">
+        <div class="card-preview">
+          {{if index . "preview_src"}}
+          <img src="{{index . "preview_src"}}" alt="" loading="lazy" referrerpolicy="no-referrer">
+          {{else}}
+          <div class="preview-placeholder">No preview</div>
+          {{end}}
+          {{if index . "is_collection"}}<span class="badge">Collection</span>{{end}}
+        </div>
+        <div class="card-body">
+          <h2 class="card-title">{{index . "title"}}</h2>
+          <p class="card-desc">{{trunc (printf "%v" (index . "short_description")) 160}}</p>
+          <div class="card-stats">
+            <span title="Subscriptions">↓ {{index . "subscriptions"}}</span>
+            <span title="Favorites">★ {{index . "favorited"}}</span>
+            {{with index . "file_size_human"}}<span>{{.}}</span>{{end}}
+          </div>
+        </div>
+      </a>
+      {{if and $.DownloadEnabled $.AppID}}
+      <button
+        type="button"
+        class="card-dl btn-dl"
+        data-appid="{{$.AppID}}"
+        data-id="{{index . "id"}}"
+        data-title="{{index . "title"}}"
+        title="Download with SWD"
+      >↓ SWD</button>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  {{else}}
+  <p class="empty">No items on this page.</p>
+  {{end}}
+
+  <nav class="pagination">
+    {{if gt .Page 1}}
+    <a href="javascript:history.back()">← Prev</a>
+    {{else}}
+    <span class="disabled">← Prev</span>
+    {{end}}
+    <span class="page-num">{{.Page}} / {{.TotalPages}}</span>
+    {{if and .NextCursor (lt .Page .TotalPages)}}
+    <a href="/?appid={{.AppID}}&amp;q={{urlquery .Q}}&amp;sort={{urlquery .Sort}}&amp;page={{add .Page 1}}&amp;per_page={{.PerPage}}&amp;cursor={{urlquery .NextCursor}}">Next →</a>
+    {{else if lt .Page .TotalPages}}
+    <a href="/?appid={{.AppID}}&amp;q={{urlquery .Q}}&amp;sort={{urlquery .Sort}}&amp;page={{add .Page 1}}&amp;per_page={{.PerPage}}">Next →</a>
+    {{else}}
+    <span class="disabled">Next →</span>
+    {{end}}
+  </nav>
+{{else if not .HasQuery}}
+  <p class="empty">Enter an AppID to list Workshop items.</p>
+{{end}}
+{{end}}
+{{define "scripts"}}
+{{if .DownloadEnabled}}
+<script>
+(function () {
+  document.querySelectorAll(".btn-dl").forEach(function (btn) {
+    btn.addEventListener("click", async function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const appid = parseInt(btn.dataset.appid || "0", 10);
+      const id = parseInt(btn.dataset.id || "0", 10);
+      if (!appid || !id) return;
+      btn.disabled = true;
+      btn.textContent = "…";
+      try {
+        const resp = await fetch("/api/downloads", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appid: appid,
+            workshopid: id,
+            title: btn.dataset.title || "",
+          }),
+        });
+        if (!resp.ok) throw new Error(resp.statusText);
+        btn.textContent = "✓";
+      } catch (e) {
+        btn.textContent = "!";
+        btn.disabled = false;
+      }
+    });
+  });
+})();
+</script>
+{{end}}
+{{end}}

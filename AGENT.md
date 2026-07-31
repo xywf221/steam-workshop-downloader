@@ -13,20 +13,21 @@ Python 5.x is under `legacy/` only.
 ```
 cmd/swd/                 main → internal/cli
 internal/
-  cli/                   Kong: download, web (stub), version
+  cli/                   Kong: download, web, version
   proxy/                 parse URL + SOCKS4/5/HTTP CONNECT dialer
   steam/
     cm/                  CM TCP, channel encrypt, anon login, jobs, SendUM
     crypto/              AES (ECB-IV+CBC) + RSA-OAEP-SHA1 universe key
     protocol/            VT01 frames, Msg/MsgProto headers
     pb/                  minimal protobuf wire codec
-    workshop/            GetDetails, ResolveIDs (collections)
+    workshop/            GetDetails, QueryFiles, ResolveIDs (collections)
     cdn/                 content servers, depot key, manifest, chunks
     manifest/            depot manifest parse + filename decrypt
     session.go           InitSession façade
   dll/                   LoadLibrary + RVA decompress (Windows)
   chunkcodec/            DLL-first decompress
-  download/              DownloadItem: skip SHA1, retries, jobs
+  download/              DownloadItem: skip SHA1, retries, jobs, Progress hooks
+  web/                   HTTP UI: browse, detail, downloads, media proxy
   ui/                    Log (stderr, colour, log-file)
   util/                  backoff, SuggestJobs, FormatSize/Duration
   version/
@@ -43,6 +44,8 @@ cli → download → cdn → cm / workshop / manifest / crypto
          ↓
     chunkcodec → dll
 cli → steam.InitSession → cm + proxy
+cli → web → browse SteamSession + download SteamSession
+         → DownloadManager → download.DownloadItem
 ```
 
 ## Entry points
@@ -52,14 +55,14 @@ cli → steam.InitSession → cm + proxy
 | `swd download <appid> <ids…>` | Full download pipeline |
 | `swd <appid> <ids…>` | Same (auto-inserts `download`) |
 | `swd version` | Print version |
-| `swd web` | Stub (phase 2) |
+| `swd web` | Browse / search / queue downloads UI |
 | `go test ./...` | Unit tests |
 
 ## Critical constants
 
 | Name | Value |
 |------|-------|
-| Version | `6.0.0` |
+| Version | `6.1.0` |
 | `RVADecompressAll` | `0xCEAA90` |
 | `RVAPutFunc` / `RVAGetFunc` | `0xEB570` / `0xD3F20` |
 | `MaxChunkSize` | 100 MiB |

@@ -2,7 +2,7 @@
 
 Offline Steam Workshop downloader. No `steamcmd` subprocess.
 
-**Go 6.x** — first-party Steam protocol (CM / UM / CDN), [Kong](https://github.com/alecthomas/kong) CLI, Windows `steamclient64.dll` for VSZa. **No ValvePython, no monkey-patches.**
+**Go 6.x** — first-party Steam protocol (CM / UM / CDN), [Kong](https://github.com/alecthomas/kong) CLI, Windows `steamclient64.dll` for VSZa, embedded **web UI**. **No ValvePython, no monkey-patches.**
 
 Python 5.x sources are archived under [`legacy/`](legacy/) for reference.
 
@@ -59,7 +59,21 @@ swd 294100 3683834622
 
 Exit `0` on full success, `1` on failure.
 
-`swd web` (browse UI) is **not implemented yet** (phase 2).
+### Web UI
+
+```bash
+swd web --host 127.0.0.1 --port 8765 -o ./downloads
+swd web --proxy socks5://127.0.0.1:1080 -o ./downloads
+```
+
+Open `http://127.0.0.1:8765` — browse / search by AppID, item detail, queue downloads (progress on `/downloads`). With `--proxy`, preview images are fetched server-side via `/media/image` so the browser does not need the proxy.
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--host` | `127.0.0.1` | Bind address |
+| `--port` | `8765` | Bind port |
+| `-o / --output` | `.` | Directory for web-queued downloads |
+| `--proxy` | none | Same schemes as `swd download` |
 
 ## Features
 
@@ -70,6 +84,7 @@ Exit `0` on full success, `1` on failure.
 - Per-file retry with exponential backoff
 - SOCKS5/4 and HTTP CONNECT proxies (credentials supported)
 - Structured stderr logging
+- Web UI: QueryFiles browse/search, media proxy, download queue
 
 ## Development
 

@@ -20,17 +20,31 @@ const (
 	UMTimeout = 30 * time.Second
 )
 
-// Item is one published file (download-oriented fields).
+// Item is one published file (download + browse fields).
 type Item struct {
-	ID            uint64
-	Title         string
-	FileType      uint32
-	ConsumerAppID uint32
-	HContentFile  uint64 // SteamPipe manifest gid; 0 if not on SteamPipe
-	FileSize      uint64
-	Children      []uint64
-	Result        uint32
+	ID               uint64
+	Title            string
+	ShortDescription string
+	PreviewURL       string
+	FileType         uint32
+	ConsumerAppID    uint32
+	HContentFile     uint64 // SteamPipe manifest gid; 0 if not on SteamPipe
+	FileSize         uint64
+	Subscriptions    uint32
+	Favorited        uint32
+	Views            uint32
+	TimeCreated      uint32
+	TimeUpdated      uint32
+	Creator          uint64
+	Tags             []string
+	VoteScore        *float64
+	Banned           bool
+	Children         []uint64
+	Result           uint32
 }
+
+// IsCollection is true when file_type == Collection.
+func (it Item) IsCollection() bool { return it.FileType == FileTypeCollection }
 
 // GetDetails fetches PublishedFile.GetDetails for the given ids.
 func GetDetails(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool, log *ui.Log) ([]Item, error) {
