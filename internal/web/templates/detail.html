@@ -116,9 +116,7 @@
         ' → <a href="/downloads">view progress</a>',
         "ok"
       );
-      setTimeout(function () {
-        location.href = "/downloads";
-      }, 600);
+      btn.disabled = false;
     } catch (e) {
       setStatus("Queue failed: " + e, "err");
       btn.disabled = false;
