@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -48,6 +49,27 @@ const (
 // DialContextFunc dials a TCP address (optionally through a proxy).
 type DialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
+// msgConn is the transport between readLoop/sendRaw and the wire.
+// TCP: one message = [VT01 len+magic][payload]. WebSocket: binary frame payload.
+type msgConn interface {
+	ReadMsg() ([]byte, error)
+	WriteMsg(payload []byte) error
+	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
+	Close() error
+}
+
+// tcpMsgConn wraps a net.Conn with VT01 framing.
+type tcpMsgConn struct{ c net.Conn }
+
+func (t *tcpMsgConn) ReadMsg() ([]byte, error)         { return protocol.ReadPacket(t.c) }
+func (t *tcpMsgConn) WriteMsg(payload []byte) error     { return protocol.WritePacket(t.c, payload) }
+func (t *tcpMsgConn) SetReadDeadline(d time.Time) error { return t.c.SetReadDeadline(d) }
+func (t *tcpMsgConn) SetWriteDeadline(d time.Time) error {
+	return t.c.SetWriteDeadline(d)
+}
+func (t *tcpMsgConn) Close() error { return t.c.Close() }
+
 // Client is a single Steam CM TCP session.
 type Client struct {
 	Dial      DialContextFunc
@@ -56,7 +78,7 @@ type Client struct {
 	Logf      func(format string, args ...any) // optional debug
 
 	mu            sync.Mutex
-	conn          net.Conn
+	conn          msgConn
 	channelKey    []byte
 	channelHMAC   []byte
 	channelOK     bool
@@ -223,9 +245,9 @@ func (e *LoginError) Error() string {
 
 func (c *Client) connectOne(ctx context.Context, srv Server) error {
 	c.Disconnect()
-	conn, err := c.Dial(ctx, "tcp", srv.Addr())
+	conn, err := c.dialTransported(ctx, srv)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", srv.Addr(), err)
+		return err
 	}
 	c.mu.Lock()
 	c.conn = conn
@@ -234,16 +256,53 @@ func (c *Client) connectOne(ctx context.Context, srv Server) error {
 	c.channelKey = nil
 	c.channelHMAC = nil
 	c.loggedOn = false
+	if srv.WSS {
+		// WebSocket rides on TLS, so Steam skips the ChannelEncrypt
+		// Request/Response/Result handshake entirely — we jump straight to logon.
+		c.channelOK = true
+	}
 	c.mu.Unlock()
 
 	go c.readLoop()
 
 	// Wait for channel encrypt request then complete handshake.
-	if err := c.secureChannel(ctx); err != nil {
-		c.Disconnect()
-		return err
+	if !srv.WSS {
+		if err := c.secureChannel(ctx); err != nil {
+			c.Disconnect()
+			return err
+		}
 	}
 	return nil
+}
+
+// dialTransported opens the wire transport for a server: raw TCP+VT01 by default,
+// TLS+WebSocket when the server entry came from serverlist_websockets.
+func (c *Client) dialTransported(ctx context.Context, srv Server) (msgConn, error) {
+	if !srv.WSS {
+		raw, err := c.Dial(ctx, "tcp", srv.Addr())
+		if err != nil {
+			return nil, fmt.Errorf("dial %s: %w", srv.Addr(), err)
+		}
+		return &tcpMsgConn{c: raw}, nil
+	}
+
+	tcp, err := c.Dial(ctx, "tcp", srv.Addr())
+	if err != nil {
+		return nil, fmt.Errorf("wss dial %s: %w", srv.Addr(), err)
+	}
+	// WebSocket over TLS; host must be the SNI name from the endpoint list.
+	tlsConn := tls.Client(tcp, &tls.Config{ServerName: srv.Host})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		_ = tcp.Close()
+		return nil, fmt.Errorf("wss tls %s: %w", srv.Host, err)
+	}
+	ws, err := newWSSConn(tlsConn, srv.Host, srv.Port)
+	if err != nil {
+		_ = tlsConn.Close()
+		return nil, fmt.Errorf("wss handshake %s: %w", srv.Addr(), err)
+	}
+	c.logf("wss connected %s (%d)", srv.Host, srv.Port)
+	return ws, nil
 }
 
 func (c *Client) secureChannel(ctx context.Context) error {
@@ -563,7 +622,7 @@ func (c *Client) sendRaw(payload []byte, encryptOK bool) error {
 		}
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-	return protocol.WritePacket(conn, data)
+	return conn.WriteMsg(data)
 }
 
 func (c *Client) waitEMsg(ctx context.Context, emsg protocol.EMsg, timeout time.Duration) (packet, error) {
@@ -599,7 +658,7 @@ func (c *Client) readLoop() {
 	}
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(120 * time.Second))
-		raw, err := protocol.ReadPacket(conn)
+		raw, err := conn.ReadMsg()
 		if err != nil {
 			if err != io.EOF {
 				c.logf("read loop: %v", err)

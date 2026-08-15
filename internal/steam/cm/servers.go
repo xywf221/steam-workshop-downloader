@@ -14,6 +14,7 @@ import (
 type Server struct {
 	Host string
 	Port int
+	WSS  bool // dial via TLS+WebSocket instead of raw TCP+VT01
 }
 
 func (s Server) Addr() string {
@@ -107,7 +108,8 @@ func (l *ServerList) BootstrapWebAPI(ctx context.Context, httpClient *http.Clien
 	}
 	var payload struct {
 		Response struct {
-			ServerList []string `json:"serverlist"`
+			ServerList          []string `json:"serverlist"`
+			ServerListWebSocket []string `json:"serverlist_websockets"`
 		} `json:"response"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -115,22 +117,56 @@ func (l *ServerList) BootstrapWebAPI(ctx context.Context, httpClient *http.Clien
 	}
 	var ss []Server
 	for _, entry := range payload.Response.ServerList {
-		host, portStr, err := net.SplitHostPort(entry)
-		if err != nil {
-			continue
+		s, ok := parseServerEntry(entry, false)
+		if ok {
+			ss = append(ss, s)
 		}
-		var port int
-		fmt.Sscanf(portStr, "%d", &port)
-		if port == 0 {
-			continue
+	}
+	// serverlist_websockets entries are host:port on wss:// — Steam's preferred
+	// transport (TCP 27017 is often port-filtered). Prefer them over raw TCP so
+	// raw-27017-blocked exits still work.
+	for _, entry := range payload.Response.ServerListWebSocket {
+		s, ok := parseServerEntry(entry, true)
+		if ok {
+			ss = append(ss, s)
 		}
-		ss = append(ss, Server{Host: host, Port: port})
 	}
 	if len(ss) == 0 {
 		return fmt.Errorf("GetCMList returned no servers")
 	}
+	// Default to preferring WSS entries. Keep raw TCP entries for fallback.
+	sortServerListWSSFirst(&ss)
 	l.Add(ss...)
 	return nil
+}
+
+func parseServerEntry(entry string, wss bool) (Server, bool) {
+	host, portStr, err := net.SplitHostPort(entry)
+	if err != nil {
+		return Server{}, false
+	}
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+	if port == 0 {
+		return Server{}, false
+	}
+	return Server{Host: host, Port: port, WSS: wss}, true
+}
+
+// sortServerListWSSFirst moves WSS endpoints to the front of the list so
+// preferred transports are attempted first. Stable so raw-TCP fallbacks stay
+// available at the tail.
+func sortServerListWSSFirst(ss *[]Server) {
+	ws := make([]Server, 0, len(*ss))
+	raw := make([]Server, 0, len(*ss))
+	for _, s := range *ss {
+		if s.WSS {
+			ws = append(ws, s)
+		} else {
+			raw = append(raw, s)
+		}
+	}
+	*ss = append(ws, raw...)
 }
 
 // BootstrapDNS adds the classic cm0.steampowered.com:27017 fallback.
