@@ -37,12 +37,16 @@ func NewDialer(p *Parsed) (*Dialer, error) {
 
 	switch p.Proto {
 	case ProtoSOCKS5:
-		// golang.org/x/net/proxy SOCKS5 always does remote DNS when host is a name.
-		sd, err := xproxy.SOCKS5("tcp", addr, auth, d.Direct)
-		if err != nil {
-			return nil, fmt.Errorf("socks5 dialer: %w", err)
+		// socks5h = remote DNS (x/net default); plain socks5 = local DNS then IP to proxy.
+		if p.RDNS {
+			sd, err := xproxy.SOCKS5("tcp", addr, auth, d.Direct)
+			if err != nil {
+				return nil, fmt.Errorf("socks5 dialer: %w", err)
+			}
+			d.inner = sd
+		} else {
+			d.inner = &socks5LocalDNSToIPDialer{proxyAddr: addr, auth: auth, forward: d.Direct}
 		}
-		d.inner = sd
 	case ProtoSOCKS4:
 		// x/net/proxy has no first-class SOCKS4; use SOCKS5 dialer only for 5.
 		// Implement minimal SOCKS4 via custom dialer.
@@ -113,6 +117,125 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		return nil, ctx.Err()
 	case r := <-ch:
 		return r.c, r.err
+	}
+}
+
+// --- SOCKS5 with local DNS (plain socks5:// semantics) ---
+
+// socks5LocalDNSToIPDialer implements RFC 1928 "no-auth + user/pass" with the
+// destination resolved locally and sent to the proxy as an IP, so resolution
+// uses local DNS instead of the proxy's. Mirrors x/net/proxy SOCKS5 framing.
+type socks5LocalDNSToIPDialer struct {
+	proxyAddr string
+	auth      *xproxy.Auth
+	forward   *net.Dialer
+}
+
+func (s *socks5LocalDNSToIPDialer) Dial(network, address string) (net.Conn, error) {
+	return s.DialContext(context.Background(), network, address)
+}
+
+func (s *socks5LocalDNSToIPDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := net.LookupPort(network, portStr)
+	if err != nil {
+		return nil, err
+	}
+	// Resolve host locally, then send the proxy a raw IP.
+	ips, err := s.forward.Resolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var ip net.IP
+	if len(ips) > 0 {
+		ip = net.ParseIP(ips[0])
+	}
+	if ip == nil {
+		if p4, err4 := net.ResolveIPAddr("ip", host); err4 == nil {
+			ip = p4.IP
+		} else {
+			return nil, err4
+		}
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return nil, fmt.Errorf("socks5 local dns: no IPv4 address for %s", host)
+	}
+
+	conn, err := s.forward.DialContext(ctx, "tcp", s.proxyAddr)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeSOCKS5Greeting(conn, s.auth); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	// ATYP=1 IPv4.
+	b := make([]byte, 0, 1+1+4+2)
+	b = append(b, 0x05, 0x01, 0x00, ip4[0], ip4[1], ip4[2], ip4[3], byte(port>>8), byte(port))
+	if _, err := conn.Write(b); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	resp := make([]byte, 4)
+	if _, err := readFull(conn, resp); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if resp[0] != 0x05 || resp[1] != 0x00 {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 connect rejected (status=%d)", resp[1])
+	}
+	return conn, nil
+}
+
+func writeSOCKS5Greeting(conn net.Conn, auth *xproxy.Auth) error {
+	var b []byte
+	if auth == nil || (auth.User == "" && auth.Password == "") {
+		b = []byte{0x05, 0x01, 0x00}
+	} else {
+		b = []byte{0x05, 0x02, 0x00, 0x02}
+	}
+	if _, err := conn.Write(b); err != nil {
+		return err
+	}
+	resp := make([]byte, 2)
+	if _, err := readFull(conn, resp); err != nil {
+		return err
+	}
+	if resp[0] != 0x05 {
+		return fmt.Errorf("socks5: bad version %d", resp[0])
+	}
+	switch resp[1] {
+	case 0x00:
+		return nil
+	case 0x02:
+		if auth == nil {
+			return fmt.Errorf("socks5: proxy requires auth but none supplied")
+		}
+		if len(auth.User) > 255 || len(auth.Password) > 255 {
+			return fmt.Errorf("socks5: auth user/pass too long")
+		}
+		b := make([]byte, 0, 3+len(auth.User)+len(auth.Password))
+		b = append(b, 0x01, byte(len(auth.User)))
+		b = append(b, auth.User...)
+		b = append(b, byte(len(auth.Password)))
+		b = append(b, auth.Password...)
+		if _, err := conn.Write(b); err != nil {
+			return err
+		}
+		if _, err := readFull(conn, resp); err != nil {
+			return err
+		}
+		if resp[1] != 0x00 {
+			return fmt.Errorf("socks5: auth failed (%d)", resp[1])
+		}
+		return nil
+	default:
+		return fmt.Errorf("socks5: no acceptable auth method (server chose %d)", resp[1])
 	}
 }
 

@@ -101,6 +101,8 @@ func Parse(url string) (Parsed, error) {
 			scheme, url,
 		)
 	}
+	// socks5h:// (or socks5 with "h") = proxy-side DNS; plain socks5:// = local DNS.
+	rdns := scheme == "socks5h" || scheme == "socks5hd"
 
 	var user, password string
 	hasAuth := false
@@ -138,7 +140,7 @@ func Parse(url string) (Parsed, error) {
 		Username: user,
 		Password: password,
 		HasAuth:  hasAuth,
-		RDNS:     true,
+		RDNS:     rdns,
 		Scheme:   scheme,
 		Original: url,
 	}, nil

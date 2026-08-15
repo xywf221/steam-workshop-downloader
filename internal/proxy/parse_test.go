@@ -34,8 +34,11 @@ func TestParseValid(t *testing.T) {
 		if p.Username != c.user || p.Password != c.password || p.HasAuth != c.hasAuth {
 			t.Errorf("Parse(%q) auth user=%q pass=%q has=%v", c.url, p.Username, p.Password, p.HasAuth)
 		}
-		if !p.RDNS {
-			t.Errorf("Parse(%q) RDNS want true", c.url)
+		if c.scheme == "socks5h" && !p.RDNS {
+			t.Errorf("Parse(%q) RDNS want true for socks5h", c.url)
+		}
+		if c.scheme != "socks5h" && p.RDNS {
+			t.Errorf("Parse(%q) RDNS want false for %q", c.url, c.scheme)
 		}
 	}
 }
