@@ -8,7 +8,9 @@ import (
 )
 
 func (s *Server) indexPage(w http.ResponseWriter, r *http.Request) {
+
 	data := s.baseData()
+	data["Nav"] = "browse"
 	appidRaw := r.URL.Query().Get("appid")
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	sort := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort")))
@@ -89,6 +91,7 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := s.baseData()
+	data["Nav"] = "browse"
 	data["ItemID"] = id
 	data["AppID"] = r.URL.Query().Get("appid")
 	data["ProxyEnabled"] = s.cfg.ProxyURL != ""
@@ -111,6 +114,7 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) downloadsPage(w http.ResponseWriter, r *http.Request) {
 	data := s.baseData()
+	data["Nav"] = "downloads"
 	jobs := s.dlMgr.ListJobs(100)
 	out := make([]map[string]any, 0, len(jobs))
 	for _, j := range jobs {

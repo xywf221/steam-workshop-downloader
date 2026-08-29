@@ -1,38 +1,43 @@
-{{define "title"}}{{if .AppID}}App {{.AppID}} — SWD Workshop{{else}}SWD Workshop Browser{{end}}{{end}}
+{{define "title"}}{{if .AppID}}App {{.AppID}} — SWD Workshop{{else}}SWD Workshop{{end}}{{end}}
 {{define "content"}}
-<section class="search-panel">
+<div class="page-head">
+  <h1>Browse Workshop</h1>
+  <p class="sub">Search and download items straight from Steam — no client, no API key.</p>
+</div>
+
+<section class="search-panel panel">
   <form class="search-form" method="get" action="/">
-    <label>
+    <label class="field">
       <span>AppID</span>
-      <input type="text" name="appid" value="{{.AppID}}" placeholder="e.g. 294100" required inputmode="numeric">
+      <input class="input" type="text" name="appid" value="{{.AppID}}" placeholder="294100" required inputmode="numeric">
     </label>
-    <label class="grow">
+    <label class="field grow">
       <span>Search</span>
-      <input type="text" name="q" value="{{.Q}}" placeholder="mod name or keywords (optional)">
+      <input class="input" type="text" name="q" value="{{.Q}}" placeholder="mod name or keywords (optional)">
     </label>
-    <label>
-      <span>Sort</span>
-      <select name="sort">
+    <label class="field">
+      <span>Sort by</span>
+      <select class="input" name="sort">
         <option value="trend" {{if eq .Sort "trend"}}selected{{end}}>Trending</option>
         <option value="votes" {{if eq .Sort "votes"}}selected{{end}}>Top rated</option>
         <option value="subscriptions" {{if eq .Sort "subscriptions"}}selected{{end}}>Most subscribed</option>
         <option value="new" {{if eq .Sort "new"}}selected{{end}}>Newest</option>
-        <option value="search" {{if eq .Sort "search"}}selected{{end}}>Text search</option>
+        <option value="search" {{if eq .Sort "search"}}selected{{end}}>Text relevance</option>
       </select>
     </label>
-    <button type="submit">Search</button>
+    <button class="btn" type="submit">Search</button>
   </form>
-  <p class="hint">Tip: RimWorld <code>294100</code> · download with <code>swd &lt;appid&gt; &lt;workshopid&gt;</code></p>
+  <p class="hint">RimWorld <code>294100</code> · Wallpaper Engine <code>431960</code> · CLI: <code>swd &lt;appid&gt; &lt;workshopid&gt;</code></p>
 </section>
 
 {{if .Error}}
-  <div class="alert error">{{.Error}}</div>
+  <div class="alert error">⚠ {{.Error}}</div>
 {{end}}
 
 {{if and .HasQuery (not .Error)}}
   <div class="results-meta">
-    <strong>{{.Total}}</strong> result{{if ne .Total 1}}s{{end}}
-    · page {{.Page}} / {{.TotalPages}}
+    <span><strong>{{.Total}}</strong> result{{if ne .Total 1}}s{{end}}</span>
+    <span class="dim">· page {{.Page}} of {{.TotalPages}}</span>
   </div>
 
   {{if .Items}}
@@ -50,11 +55,11 @@
         </div>
         <div class="card-body">
           <h2 class="card-title">{{index . "title"}}</h2>
-          <p class="card-desc">{{trunc (printf "%v" (index . "short_description")) 160}}</p>
+          <p class="card-desc">{{trunc (printf "%v" (index . "short_description")) 140}}</p>
           <div class="card-stats">
-            <span title="Subscriptions">↓ {{index . "subscriptions"}}</span>
-            <span title="Favorites">★ {{index . "favorited"}}</span>
-            {{with index . "file_size_human"}}<span>{{.}}</span>{{end}}
+            <span class="stat" title="Subscriptions">⬇ {{index . "subscriptions"}}</span>
+            <span class="stat" title="Favorites">★ {{index . "favorited"}}</span>
+            {{with index . "file_size_human"}}<span class="stat">{{.}}</span>{{end}}
           </div>
         </div>
       </a>
@@ -66,13 +71,13 @@
         data-id="{{index . "id"}}"
         data-title="{{index . "title"}}"
         title="Download with SWD"
-      >↓ SWD</button>
+      >⬇ SWD</button>
       {{end}}
     </div>
     {{end}}
   </div>
   {{else}}
-  <p class="empty">No items on this page.</p>
+  <p class="empty"><span class="empty-icon">🔍</span>No items on this page.</p>
   {{end}}
 
   <nav class="pagination">
@@ -91,7 +96,7 @@
     {{end}}
   </nav>
 {{else if not .HasQuery}}
-  <p class="empty">Enter an AppID to list Workshop items.</p>
+  <p class="empty"><span class="empty-icon">🎮</span>Enter an AppID to list Workshop items.</p>
 {{end}}
 {{end}}
 {{define "scripts"}}
@@ -111,17 +116,15 @@
         const resp = await fetch("/api/downloads", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            appid: appid,
-            workshopid: id,
-            title: btn.dataset.title || "",
-          }),
+          body: JSON.stringify({ appid: appid, workshopid: id, title: btn.dataset.title || "" }),
         });
         if (!resp.ok) throw new Error(resp.statusText);
         btn.textContent = "✓";
+        window.swdToast("Queued: " + (btn.dataset.title || id), "ok");
       } catch (e) {
         btn.textContent = "!";
         btn.disabled = false;
+        window.swdToast("Queue failed: " + e.message, "err");
       }
     });
   });

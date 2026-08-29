@@ -3,11 +3,11 @@
 <p class="back"><a href="javascript:history.back()">← Back</a> · <a href="/">Home</a></p>
 
 {{if .Error}}
-  <div class="alert error">{{.Error}}</div>
+  <div class="alert error">⚠ {{.Error}}</div>
 {{end}}
 
 {{if .Item}}
-<article class="detail">
+<article class="detail panel">
   <div class="detail-preview">
     {{if index .Item "preview_src"}}
     <img src="{{index .Item "preview_src"}}" alt="" referrerpolicy="no-referrer">
@@ -23,11 +23,11 @@
       {{if index .Item "banned"}} · <span class="badge bad">Banned</span>{{end}}
     </p>
     <div class="stats-row">
-      <span>↓ {{index .Item "subscriptions"}} subs</span>
-      <span>★ {{index .Item "favorited"}} favs</span>
-      <span>👁 {{index .Item "views"}} views</span>
-      {{with index .Item "file_size_human"}}<span>{{.}}</span>{{end}}
-      {{with index .Item "vote_score"}}<span>score {{printf "%.2f" .}}</span>{{end}}
+      <span class="stat-chip">⬇ <b>{{index .Item "subscriptions"}}</b> subs</span>
+      <span class="stat-chip">★ <b>{{index .Item "favorited"}}</b> favs</span>
+      <span class="stat-chip">👁 <b>{{index .Item "views"}}</b> views</span>
+      {{with index .Item "file_size_human"}}<span class="stat-chip"><b>{{.}}</b></span>{{end}}
+      {{with index .Item "vote_score"}}<span class="stat-chip">score <b>{{printf "%.2f" .}}</b></span>{{end}}
     </div>
     {{with index .Item "tags"}}
     <div class="tags">
@@ -46,24 +46,23 @@
         data-appid="{{if index .Item "consumer_appid"}}{{index .Item "consumer_appid"}}{{else}}{{.AppID}}{{end}}"
         data-id="{{index .Item "id"}}"
         data-title="{{index .Item "title"}}"
-      >Download with SWD</button>
+      >⬇ Download</button>
       <button
         type="button"
         class="btn btn-ghost"
         id="btn-subscribe"
         data-appid="{{if index .Item "consumer_appid"}}{{index .Item "consumer_appid"}}{{else}}{{.AppID}}{{end}}"
         data-id="{{index .Item "id"}}"
-      >Subscribe</button>
+      >＋ Subscribe</button>
       <a class="btn btn-ghost" href="/downloads">View progress</a>
       {{else}}
       <p class="hint">Start with <code>-o ./downloads</code> to enable local downloads.</p>
       {{end}}
-      <a class="btn btn-ghost" href="{{index .Item "steam_url"}}" target="_blank" rel="noopener">Steam page</a>
+      <a class="btn btn-ghost" href="{{index .Item "steam_url"}}" target="_blank" rel="noopener">Steam page ↗</a>
     </div>
     <div id="dl-status" class="dl-status" hidden></div>
     {{if .DownloadEnabled}}
-    <p class="hint">Uses local SWD download (CDN + hash skip) →
-      <code>{{.DownloadOutput}}</code></p>
+    <p class="hint">Downloads → <code>{{.DownloadOutput}}</code></p>
     {{end}}
   </div>
 </article>
@@ -74,8 +73,8 @@
 <script>
 (function () {
   const btn = document.getElementById("btn-download");
+  const subBtn = document.getElementById("btn-subscribe");
   const status = document.getElementById("dl-status");
-  if (!btn || !status) return;
 
   function setStatus(html, cls) {
     status.hidden = false;
@@ -96,34 +95,24 @@
     return appid;
   }
 
-  const subBtn = document.getElementById("btn-subscribe");
   if (subBtn) {
     subBtn.addEventListener("click", async function () {
       const appid = resolveAppID(subBtn);
-      if (!appid) {
-        setStatus("A valid AppID is required.", "err");
-        return;
-      }
+      if (!appid) { setStatus("A valid AppID is required.", "err"); return; }
       subBtn.disabled = true;
       setStatus("Subscribing…");
       try {
         const resp = await fetch("/api/subscriptions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            app_id: appid,
-            workshop_id: parseInt(subBtn.dataset.id, 10),
-          }),
+          body: JSON.stringify({ app_id: appid, workshop_id: parseInt(subBtn.dataset.id, 10) }),
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
           setStatus("Subscribe failed: " + (data.error || resp.statusText), "err");
         } else {
-          setStatus(
-            "Subscribed " + (data.added || 1) + " item(s)" +
-            ' → <a href="/subscriptions">manage subscriptions</a>',
-            "ok"
-          );
+          setStatus('Subscribed ' + (data.added || 1) + ' item(s) → <a href="/subscriptions">manage subscriptions</a>', "ok");
+          window.swdToast("Subscribed", "ok");
         }
       } catch (e) {
         setStatus("Subscribe failed: " + e, "err");
@@ -132,44 +121,41 @@
     });
   }
 
-  btn.addEventListener("click", async function () {
-    const appid = resolveAppID(btn);
-    if (!appid) {
-      setStatus("A valid AppID is required.", "err");
-      return;
-    }
-    btn.disabled = true;
-    setStatus("Queuing SWD download…");
-    try {
-      const resp = await fetch("/api/downloads", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          appid: appid,
-          workshopid: parseInt(btn.dataset.id, 10),
-          title: btn.dataset.title || "",
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        setStatus("Queue failed: " + (data.error || resp.statusText), "err");
-        btn.disabled = false;
-        return;
+  if (btn) {
+    btn.addEventListener("click", async function () {
+      const appid = resolveAppID(btn);
+      if (!appid) { setStatus("A valid AppID is required.", "err"); return; }
+      btn.disabled = true;
+      setStatus("Queuing download…");
+      try {
+        const resp = await fetch("/api/downloads", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appid: appid,
+            workshopid: parseInt(btn.dataset.id, 10),
+            title: btn.dataset.title || "",
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          setStatus("Queue failed: " + (data.error || resp.statusText), "err");
+        } else {
+          const n = (data.jobs || []).length;
+          const job = (data.jobs || [])[0];
+          setStatus(
+            "Queued " + n + " job(s)" +
+            (job ? " (" + (job.title || job.workshop_id) + ")" : "") +
+            ' → <a href="/downloads">view progress</a>',
+            "ok"
+          );
+        }
+      } catch (e) {
+        setStatus("Queue failed: " + e, "err");
       }
-      const n = (data.jobs || []).length;
-      const job = (data.jobs || [])[0];
-      setStatus(
-        "Queued " + n + " job(s)" +
-        (job ? " (" + (job.title || job.workshop_id) + ")" : "") +
-        ' → <a href="/downloads">view progress</a>',
-        "ok"
-      );
       btn.disabled = false;
-    } catch (e) {
-      setStatus("Queue failed: " + e, "err");
-      btn.disabled = false;
-    }
-  });
+    });
+  }
 })();
 </script>
 {{end}}

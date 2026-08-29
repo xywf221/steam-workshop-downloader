@@ -1,64 +1,64 @@
 {{define "title"}}Subscriptions — SWD{{end}}
 {{define "content"}}
-<section class="subs-panel">
-  <div class="subs-head">
-    <h1>Subscriptions</h1>
-    <p class="hint">Stored in <code>{{.DownloadOutput}}/subscriptions.json</code></p>
-  </div>
+<div class="page-head">
+  <h1>Subscriptions</h1>
+  <p class="sub">Followed items · updates sync incrementally · stored in <code>subscriptions.json</code></p>
+</div>
 
-  <form id="add-form" class="sub-add-form">
-    <input type="number" id="add-appid" placeholder="AppID (e.g. 294100)" required min="1">
-    <input type="number" id="add-wid" placeholder="Workshop ID or collection" required min="1">
-    <button type="submit">Subscribe</button>
-  </form>
+<form id="add-form" class="sub-add-form panel">
+  <input class="input" type="number" id="add-appid" placeholder="AppID — e.g. 294100" required min="1">
+  <input class="input" type="number" id="add-wid" placeholder="Workshop ID or collection ID" required min="1">
+  <button class="btn" type="submit">＋ Subscribe</button>
+</form>
 
-  <div class="subs-actions">
-    <button id="check-btn" type="button">Check updates</button>
-    <button id="update-all-btn" type="button">Update all</button>
-    <span id="subs-msg" class="subs-msg"></span>
-  </div>
+<div class="subs-toolbar">
+  <button id="check-btn" class="btn btn-ghost" type="button">↻ Check updates</button>
+  <button id="update-all-btn" class="btn" type="button">⬇ Update all</button>
+  <span class="spacer"></span>
+  <span id="subs-msg" class="subs-msg"></span>
+</div>
 
-  <div id="subs" class="sub-list">
-    {{if not .Subs}}
-    <p class="empty" id="empty-msg">No subscriptions yet. Add one above, or use the Subscribe button on an item page.</p>
-    {{end}}
-    {{range .Subs}}
-    <article class="sub-card" data-id="{{index . "workshop_id"}}">
-      <div class="sub-top">
-        <strong class="sub-title">{{index . "title"}}</strong>
-        <span class="sub-state" data-state>…</span>
+<div id="subs" class="sub-list">
+  {{if not .Subs}}
+  <p class="empty" id="empty-msg"><span class="empty-icon">📋</span>No subscriptions yet — add one above, or hit Subscribe on any item page.</p>
+  {{end}}
+  {{range .Subs}}
+  <article class="sub-card panel" data-id="{{index . "workshop_id"}}">
+    <div class="sub-main">
+      <div class="sub-title-row">
+        <strong class="sub-title"><a href="/item/{{index . "workshop_id"}}">{{index . "title"}}</a></strong>
+        <span class="pill st-checking" data-state>checking…</span>
       </div>
       <div class="sub-meta">
         <span>app {{index . "app_id"}}</span>
         <span>id {{index . "workshop_id"}}</span>
         {{if index . "synced"}}<span>synced {{index . "synced"}}</span>{{end}}
       </div>
-      <div class="sub-ops">
-        <a href="/item/{{index . "workshop_id"}}">view</a>
-        <button type="button" data-update-one="{{index . "workshop_id"}}">update</button>
-        <button type="button" class="danger" data-remove="{{index . "workshop_id"}}">unsubscribe</button>
-      </div>
-    </article>
-    {{end}}
-  </div>
-</section>
+    </div>
+    <div class="sub-ops">
+      <button type="button" class="btn btn-ghost btn-sm" data-update-one="{{index . "workshop_id"}}">Update</button>
+      <button type="button" class="btn btn-danger-ghost btn-sm" data-remove="{{index . "workshop_id"}}">Remove</button>
+    </div>
+  </article>
+  {{end}}
+</div>
 {{end}}
 {{define "scripts"}}
 <script>
 (function () {
   const root = document.getElementById("subs");
   const msg = document.getElementById("subs-msg");
+  const checkBtn = document.getElementById("check-btn");
+  const updateAllBtn = document.getElementById("update-all-btn");
 
-  function esc(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-  function say(t, isErr) {
+  function say(t, cls) {
     msg.textContent = t;
-    msg.className = "subs-msg" + (isErr ? " err" : "");
+    msg.className = "subs-msg" + (cls ? " " + cls : "");
   }
-
+  function busy(b) {
+    checkBtn.disabled = b;
+    updateAllBtn.disabled = b;
+  }
   function card(id) { return root.querySelector('.sub-card[data-id="' + id + '"]'); }
 
   function renderState(item) {
@@ -67,90 +67,101 @@
     const el = c.querySelector("[data-state]");
     let text, cls;
     if (item.error) { text = "unavailable"; cls = "st-err"; }
-    else if (item.never_sync) { text = "new — not downloaded"; cls = "st-new"; }
+    else if (item.never_sync) { text = "new"; cls = "st-new"; }
     else if (item.has_update) { text = "update available"; cls = "st-upd"; }
     else { text = "up to date"; cls = "st-ok"; }
     el.textContent = text;
-    el.className = "sub-state " + cls;
+    el.className = "pill " + cls;
   }
 
-  async function checkUpdates() {
-    say("checking…");
+  async function checkUpdates(silent) {
+    if (!silent) say("checking…");
     try {
       const r = await fetch("/api/subscriptions");
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.status);
       (d.items || []).forEach(renderState);
       const pend = (d.items || []).filter(i => i.has_update).length;
-      say(pend + " update(s) pending");
-    } catch (e) { say("check failed: " + e.message, true); }
+      say(pend ? pend + " update(s) pending" : "everything up to date", pend ? "" : "ok");
+      return pend;
+    } catch (e) {
+      say("check failed: " + e.message, "err");
+      document.querySelectorAll("[data-state]").forEach(el => {
+        if (el.textContent === "checking…") { el.textContent = "unknown"; el.className = "pill st-err"; }
+      });
+      return 0;
+    }
   }
 
   async function addSub(ev) {
     ev.preventDefault();
     const appid = parseInt(document.getElementById("add-appid").value, 10);
     const wid = parseInt(document.getElementById("add-wid").value, 10);
+    busy(true);
     say("subscribing…");
     try {
       const r = await fetch("/api/subscriptions", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({app_id: appid, workshop_id: wid})
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ app_id: appid, workshop_id: wid })
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.status);
-      say("added " + d.added + " item(s)");
-      setTimeout(() => location.reload(), 600);
-    } catch (e) { say("subscribe failed: " + e.message, true); }
+      window.swdToast("Subscribed " + d.added + " item(s)", "ok");
+      setTimeout(() => location.reload(), 500);
+    } catch (e) {
+      say("subscribe failed: " + e.message, "err");
+      busy(false);
+    }
   }
 
-  async function updateOne(id) {
-    say("updating " + id + "… (may take a while)");
+  async function runUpdate(url, label) {
+    busy(true);
+    say(label + "… this can take a while");
     try {
-      const r = await fetch("/api/subscriptions/update?id=" + id, {method: "POST"});
+      const r = await fetch(url, { method: "POST" });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.status);
-      const res = (d.results || [])[0] || {};
-      if (res.error) throw new Error(res.error);
-      say(res.skipped ? "already up to date" : "updated: " + (res.files_ok || 0) + " files, " + ((res.removed || []).length) + " removed");
-      checkUpdates();
-    } catch (e) { say("update failed: " + e.message, true); }
-  }
-
-  async function updateAll() {
-    say("updating all… (may take a while)");
-    try {
-      const r = await fetch("/api/subscriptions/update", {method: "POST"});
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || r.status);
-      say("updated " + d.updated + " / up-to-date " + d.skipped + " / failed " + d.failed);
-      checkUpdates();
-    } catch (e) { say("update failed: " + e.message, true); }
+      if (d.results && d.results.length === 1) {
+        const res = d.results[0];
+        if (res.error) throw new Error(res.error);
+        say(res.skipped ? "already up to date" : "updated: " + (res.files_ok || 0) + " files, " + ((res.removed || []).length) + " removed", "ok");
+      } else {
+        say("updated " + d.updated + " · up-to-date " + d.skipped + " · failed " + d.failed, d.failed ? "err" : "ok");
+      }
+      if (d.failed) window.swdToast(d.failed + " item(s) failed to update", "err");
+      await checkUpdates(true);
+    } catch (e) {
+      say("update failed: " + e.message, "err");
+    }
+    busy(false);
   }
 
   async function removeSub(id) {
     if (!confirm("Unsubscribe " + id + "? Downloaded files are kept.")) return;
     try {
-      const r = await fetch("/api/subscriptions/" + id, {method: "DELETE"});
+      const r = await fetch("/api/subscriptions/" + id, { method: "DELETE" });
       if (!r.ok) { const d = await r.json(); throw new Error(d.error || r.status); }
       const c = card(id);
       if (c) c.remove();
-      say("unsubscribed " + id);
-    } catch (e) { say("remove failed: " + e.message, true); }
+      window.swdToast("Unsubscribed " + id);
+      if (!root.querySelector(".sub-card")) {
+        root.innerHTML = '<p class="empty"><span class="empty-icon">📋</span>No subscriptions yet — add one above, or hit Subscribe on any item page.</p>';
+      }
+    } catch (e) { say("remove failed: " + e.message, "err"); }
   }
 
   document.getElementById("add-form").addEventListener("submit", addSub);
-  document.getElementById("check-btn").addEventListener("click", checkUpdates);
-  document.getElementById("update-all-btn").addEventListener("click", updateAll);
+  checkBtn.addEventListener("click", () => checkUpdates(false));
+  updateAllBtn.addEventListener("click", () => runUpdate("/api/subscriptions/update", "updating all"));
   root.addEventListener("click", function (ev) {
     const up = ev.target.getAttribute("data-update-one");
     const rm = ev.target.getAttribute("data-remove");
-    if (up) updateOne(up);
+    if (up) runUpdate("/api/subscriptions/update?id=" + up, "updating " + up);
     if (rm) removeSub(rm);
   });
 
-  // Auto-check once on page load.
-  checkUpdates();
+  checkUpdates(true);
 })();
 </script>
 {{end}}

@@ -4,38 +4,47 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{block "title" .}}SWD Workshop Browser{{end}}</title>
+  <title>{{block "title" .}}SWD Workshop{{end}}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232f9df0'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%2304121e' font-family='sans-serif' font-weight='800'>↓</text></svg>">
 </head>
 <body>
   <header class="site-header">
     <div class="header-left">
-      <a class="brand" href="/">SWD Workshop</a>
+      <a class="brand" href="/"><span class="brand-mark">↓</span>SWD Workshop</a>
       <span class="tagline">browse · search · download</span>
     </div>
     <nav class="header-nav">
-      <a href="/">Browse</a>
-      <a href="/subscriptions">Subscriptions</a>
+      <a href="/" {{if eq .Nav "browse"}}class="active"{{end}}>Browse</a>
+      <a href="/subscriptions" {{if eq .Nav "subscriptions"}}class="active"{{end}}>Subscriptions</a>
       {{if .DownloadEnabled}}
-      <a href="/downloads">
+      <a href="/downloads" {{if eq .Nav "downloads"}}class="active"{{end}}>
         Downloads
-        {{with .ActiveDownloads}}
-        <span class="nav-badge">{{.}}</span>
-        {{end}}
+        {{with .ActiveDownloads}}<span class="nav-badge">{{.}}</span>{{end}}
       </a>
       {{end}}
     </nav>
   </header>
   <main class="container">
-    {{if .DownloadEnabled}}
-    <p class="output-hint">Downloads → <code>{{.DownloadOutput}}</code></p>
-    {{end}}
     {{block "content" .}}{{end}}
   </main>
   <footer class="site-footer">
     <span>Steam Workshop Downloader</span>
     <span class="dim">Anonymous Steam session · no API key</span>
   </footer>
+  <div id="toast-root"></div>
+  <script>
+  // Shared toast helper — available on every page.
+  window.swdToast = function (text, kind) {
+    const root = document.getElementById("toast-root");
+    if (!root) return;
+    const el = document.createElement("div");
+    el.className = "toast" + (kind ? " " + kind : "");
+    el.textContent = text;
+    root.appendChild(el);
+    setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 300); }, 3200);
+  };
+  </script>
   {{block "scripts" .}}{{end}}
 </body>
 </html>

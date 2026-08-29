@@ -32,11 +32,11 @@ var dialer = &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}
 // some edges (notably api.steampowered.com) actively reject no-SNI
 // handshakes, and api is reachable directly anyway.
 var noSNIHosts = map[string]bool{
-	"store.steampowered.com":      true,
-	"steamcommunity.com":          true,
-	"login.steampowered.com":      true,
-	"checkout.steampowered.com":   true,
-	"help.steampowered.com":       true,
+	"store.steampowered.com":        true,
+	"steamcommunity.com":            true,
+	"login.steampowered.com":        true,
+	"checkout.steampowered.com":     true,
+	"help.steampowered.com":         true,
 	"steamcommunity-a.akamaihd.net": true,
 }
 

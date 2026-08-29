@@ -18,6 +18,7 @@ import (
 // subscriptionsPage renders the subscription management UI.
 func (s *Server) subscriptionsPage(w http.ResponseWriter, r *http.Request) {
 	data := s.baseData()
+	data["Nav"] = "subscriptions"
 	data["Subs"] = s.subStatesSnapshot()
 	s.render(w, "subscriptions.html", data)
 }
