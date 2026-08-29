@@ -107,6 +107,14 @@ func (c *Client) cdnGET(ctx context.Context, path string) ([]byte, error) {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return body, nil
 		}
+		if resp.StatusCode == 403 {
+			// 403 from a cell_id=0 PoP is usually "this CDN doesn't serve
+			// anonymous clients" — another server may accept the request.
+			// Rotate; only give up after exhausting the list.
+			last = fmt.Errorf("HTTP 403 for %s", path)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, path)
 		}

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xywf221/steam-workshop-downloader/internal/proxy"
+	"github.com/xywf221/steam-workshop-downloader/internal/stealth"
 	"github.com/xywf221/steam-workshop-downloader/internal/steam/crypto"
 	"github.com/xywf221/steam-workshop-downloader/internal/steam/protocol"
 )
@@ -77,6 +78,11 @@ type Client struct {
 	Servers   *ServerList
 	Logf      func(format string, args ...any) // optional debug
 
+	// Stealth omits the TLS SNI extension on WSS + HTTPS (mainland-China
+	// direct-connection workaround; certificates are still verified).
+	// Set automatically by NewDirect; ignored when a proxy dialer is set.
+	Stealth bool
+
 	mu            sync.Mutex
 	conn          msgConn
 	channelKey    []byte
@@ -122,6 +128,17 @@ func New(dial DialContextFunc, httpClient *http.Client) *Client {
 		jobWaiters: make(map[uint64]chan packet),
 		nextJob:    1,
 	}
+}
+
+// NewDirect creates a CM client for a proxy-less connection. Its WebAPI/media
+// HTTP client uses the stealth transport: TLS without SNI for hosts known to
+// be SNI-blocked (store/community edges), normal TLS elsewhere; certificates
+// are fully verified either way. CM websockets keep normal SNI — CM wss
+// endpoints are IP-literal and reachable directly.
+func NewDirect() *Client {
+	c := New(nil, stealth.HTTPClient(30*time.Second))
+	c.Stealth = true
+	return c
 }
 
 // NewWithProxy builds a Client whose TCP + HTTP traffic use p.

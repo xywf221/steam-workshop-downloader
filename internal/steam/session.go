@@ -40,7 +40,13 @@ func InitSession(ctx context.Context, proxyURL string, log *ui.Log) (*Session, e
 			return nil, err
 		}
 	} else {
-		client = cm.New(nil, nil)
+		// No proxy: direct connection with the stealth HTTP transport —
+		// TLS omits SNI for store/community edges (SNI-blocked on mainland
+		// direct routes) while certificates stay fully verified.
+		client = cm.NewDirect()
+		if log != nil {
+			log.Dim("  Direct connection (stealth TLS: no SNI for blocked hosts, cert verified)")
+		}
 	}
 	if log != nil {
 		client.Logf = func(format string, args ...any) {
