@@ -402,3 +402,64 @@ a:hover { color: #9ad7ff; }
   .detail { grid-template-columns: 1fr; }
   .site-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
 }
+
+/* ---- Subscriptions page ---- */
+.subs-head h1 { margin-bottom: 0.2rem; }
+.sub-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.9rem 0 0.7rem;
+}
+.sub-add-form input {
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: inherit;
+  padding: 0.45rem 0.7rem;
+  min-width: 180px;
+}
+.sub-add-form button, .subs-actions button, .sub-ops button {
+  background: var(--accent-2);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-weight: 600;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+}
+.sub-add-form button:hover, .subs-actions button:hover, .sub-ops button:hover { filter: brightness(1.1); }
+.sub-ops button { background: rgba(255,255,255,0.1); padding: 0.3rem 0.7rem; font-size: 0.82rem; }
+.sub-ops button.danger { background: rgba(255,107,107,0.18); color: var(--danger); }
+.subs-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+}
+.subs-msg { color: var(--muted); font-size: 0.88rem; }
+.subs-msg.err { color: var(--danger); }
+.sub-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.sub-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+}
+.sub-top { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.sub-title { font-size: 1rem; }
+.sub-state { font-size: 0.82rem; font-weight: 600; }
+.sub-state.st-ok { color: #6fdc8c; }
+.sub-state.st-upd { color: var(--accent); }
+.sub-state.st-new { color: #ffd479; }
+.sub-state.st-err { color: var(--danger); }
+.sub-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.3rem 0 0.5rem;
+}
+.sub-ops { display: flex; gap: 0.5rem; align-items: center; font-size: 0.85rem; }
+.empty { color: var(--muted); }

@@ -15,6 +15,7 @@ import (
 	"github.com/xywf221/steam-workshop-downloader/internal/steam"
 	"github.com/xywf221/steam-workshop-downloader/internal/steam/cdn"
 	"github.com/xywf221/steam-workshop-downloader/internal/steam/workshop"
+	"github.com/xywf221/steam-workshop-downloader/internal/subscription"
 	"github.com/xywf221/steam-workshop-downloader/internal/ui"
 	"github.com/xywf221/steam-workshop-downloader/internal/version"
 )
@@ -45,6 +46,7 @@ type Server struct {
 	dlMgr     *DownloadManager
 	cache     *BrowseCache
 	media     *MediaCache
+	subs      *subscription.Store
 	templates map[string]*template.Template
 	mux       *http.ServeMux
 	httpSrv   *http.Server
@@ -84,6 +86,13 @@ func New(cfg Config) (*Server, error) {
 		cache:  NewBrowseCache(),
 		media:  NewMediaCache(),
 		browse: NewSteamSession(cfg.ProxyURL, log, "browse"),
+	}
+	// Subscription store lives in the output dir; failure is non-fatal
+	// (the subscriptions page just shows an empty list).
+	if subs, err := subscription.Load(cfg.OutputDir); err == nil {
+		s.subs = subs
+	} else {
+		log.Warn(fmt.Sprintf("subscription store: %v", err))
 	}
 	s.download = NewSteamSession(cfg.ProxyURL, log, "download")
 	s.dlMgr = NewDownloadManager(s.download, cfg.OutputDir, log, cfg.Retries, cfg.FileJobs)
@@ -155,9 +164,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/downloads", s.apiDownloadsList)
 	s.mux.HandleFunc("GET /api/downloads/{id}", s.apiDownloadsOne)
 	s.mux.HandleFunc("GET /media/image", s.mediaImage)
+	s.mux.HandleFunc("GET /api/subscriptions", s.apiSubsList)
+	s.mux.HandleFunc("POST /api/subscriptions", s.apiSubsAdd)
+	s.mux.HandleFunc("DELETE /api/subscriptions/{id}", s.apiSubsRemove)
+	s.mux.HandleFunc("POST /api/subscriptions/update", s.apiSubsUpdate)
 	s.mux.HandleFunc("GET /{$}", s.indexPage)
 	s.mux.HandleFunc("GET /item/{id}", s.itemPage)
 	s.mux.HandleFunc("GET /downloads", s.downloadsPage)
+	s.mux.HandleFunc("GET /subscriptions", s.subscriptionsPage)
 }
 
 func (s *Server) baseData() map[string]any {

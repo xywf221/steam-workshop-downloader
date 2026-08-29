@@ -27,7 +27,7 @@ var (
 
 func parseTemplates() (map[string]*template.Template, error) {
 	tmplOnce.Do(func() {
-		pages := []string{"index.html", "detail.html", "downloads.html"}
+		pages := []string{"index.html", "detail.html", "downloads.html", "subscriptions.html"}
 		tmplMap = make(map[string]*template.Template, len(pages))
 		for _, page := range pages {
 			t, err := template.New("base").Funcs(templateFuncs()).ParseFS(

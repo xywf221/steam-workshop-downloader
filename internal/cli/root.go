@@ -14,6 +14,7 @@ import (
 // CLI is the root Kong grammar.
 type CLI struct {
 	Download DownloadCmd `cmd:"" help:"Download Steam Workshop items"`
+	Sub      SubCmd      `cmd:"" name:"sub" help:"Manage workshop subscriptions (incremental updates)"`
 	Web      WebCmd      `cmd:"" help:"Workshop browse / search / download web UI"`
 	Version  VersionCmd  `cmd:"" help:"Print version and exit"`
 }
@@ -71,7 +72,7 @@ func maybeInsertDownload(args []string) []string {
 		return args
 	}
 	first := args[0]
-	if first == "download" || first == "web" || first == "version" || first == "help" {
+	if first == "download" || first == "web" || first == "version" || first == "help" || first == "sub" {
 		return args
 	}
 	if len(first) > 0 && first[0] == '-' {

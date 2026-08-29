@@ -47,6 +47,13 @@
         data-id="{{index .Item "id"}}"
         data-title="{{index .Item "title"}}"
       >Download with SWD</button>
+      <button
+        type="button"
+        class="btn btn-ghost"
+        id="btn-subscribe"
+        data-appid="{{if index .Item "consumer_appid"}}{{index .Item "consumer_appid"}}{{else}}{{.AppID}}{{end}}"
+        data-id="{{index .Item "id"}}"
+      >Subscribe</button>
       <a class="btn btn-ghost" href="/downloads">View progress</a>
       {{else}}
       <p class="hint">Start with <code>-o ./downloads</code> to enable local downloads.</p>
@@ -76,8 +83,8 @@
     status.innerHTML = html;
   }
 
-  btn.addEventListener("click", async function () {
-    let appid = parseInt(btn.dataset.appid || "0", 10);
+  function resolveAppID(fromEl) {
+    let appid = parseInt(fromEl.dataset.appid || "0", 10);
     if (!appid) {
       const q = new URLSearchParams(location.search).get("appid");
       appid = parseInt(q || "0", 10);
@@ -86,6 +93,47 @@
       const typed = prompt("AppID for this item (e.g. 294100):");
       appid = parseInt(typed || "0", 10);
     }
+    return appid;
+  }
+
+  const subBtn = document.getElementById("btn-subscribe");
+  if (subBtn) {
+    subBtn.addEventListener("click", async function () {
+      const appid = resolveAppID(subBtn);
+      if (!appid) {
+        setStatus("A valid AppID is required.", "err");
+        return;
+      }
+      subBtn.disabled = true;
+      setStatus("Subscribing…");
+      try {
+        const resp = await fetch("/api/subscriptions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            app_id: appid,
+            workshop_id: parseInt(subBtn.dataset.id, 10),
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          setStatus("Subscribe failed: " + (data.error || resp.statusText), "err");
+        } else {
+          setStatus(
+            "Subscribed " + (data.added || 1) + " item(s)" +
+            ' → <a href="/subscriptions">manage subscriptions</a>',
+            "ok"
+          );
+        }
+      } catch (e) {
+        setStatus("Subscribe failed: " + e, "err");
+      }
+      subBtn.disabled = false;
+    });
+  }
+
+  btn.addEventListener("click", async function () {
+    const appid = resolveAppID(btn);
     if (!appid) {
       setStatus("A valid AppID is required.", "err");
       return;
