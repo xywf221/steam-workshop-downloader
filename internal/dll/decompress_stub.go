@@ -16,3 +16,8 @@ func LoadedPath() string { return "" }
 func Decompress(data []byte) ([]byte, error) {
 	return nil, fmt.Errorf("steamclient64.dll decompression is Windows-only")
 }
+
+// CompressVSZa returns an error on non-Windows.
+func CompressVSZa(data []byte) ([]byte, error) {
+	return nil, fmt.Errorf("steamclient64.dll compression is Windows-only")
+}

@@ -41,9 +41,11 @@ const (
 	FormatVSZa    = 7
 )
 
-// valveZstdMagics are the frame magics accepted inside VSZa payloads.
-// Standard zstd is 0xFD2FB528; Valve renumbered to 0x25/0x26/0x27.
-var valveZstdMagics = []uint32{0xFD2FB525, 0xFD2FB526, 0xFD2FB527}
+// acceptedZstdMagics are the frame magics the DLL's dispatcher accepts inside
+// VSZa payloads. 0xFD2FB528 is upstream standard zstd; 0x25/0x26/0x27 are
+// Valve's legacy variants (dispatcher branch: (magic + 47205083) <= 2, then
+// the == 0xFD2FB528 case). Real depot chunks use the standard magic.
+var acceptedZstdMagics = []uint32{0xFD2FB525, 0xFD2FB526, 0xFD2FB527, 0xFD2FB528}
 
 const (
 	vszaHeaderLen = 8  // "VSZa" + crc32
@@ -112,34 +114,40 @@ func decompressVSZa(data []byte) ([]byte, error) {
 
 // decodeValveZstd decodes one or more concatenated zstd frames whose magic
 // may be a Valve-renumbered variant, standard, or a skippable frame.
+//
+// Buffer-to-buffer semantics matching the DLL: the total decompressed size
+// must equal wantSize (the VSZa container's declared original size). The DLL
+// errors ZSTD_srcSize_wrong when the stream produces a different size, so we
+// do too — DecodeAll's silent frame-header size would mask container damage.
 func decodeValveZstd(payload []byte, wantSize uint64) ([]byte, error) {
 	if len(payload) < 4 {
 		return nil, fmt.Errorf("zstd payload too short")
 	}
-	// Fast path: fix magic in a copy and let klauspost handle everything
-	// (it already understands skippable frames and concatenated frames).
 	fixed := make([]byte, len(payload))
 	copy(fixed, payload)
 	magic := binary.LittleEndian.Uint32(fixed[0:4])
 	switch magic {
 	case 0xFD2FB528:
-		// already standard
-	case valveZstdMagics[0], valveZstdMagics[1], valveZstdMagics[2]:
+		// already standard — real depot chunks take this path.
+	case acceptedZstdMagics[0], acceptedZstdMagics[1], acceptedZstdMagics[2]:
+		// legacy Valve variant — rewrite to standard before decoding.
 		binary.LittleEndian.PutUint32(fixed[0:4], 0xFD2FB528)
 	default:
 		if magic&0xFFFFFFF0 != 0x184D2A50 { // not a skippable frame either
 			return nil, fmt.Errorf("not a zstd frame (magic=%08x)", magic)
 		}
 	}
-	dst := make([]byte, 0, max(wantSize, 64<<10))
 	dec, err := zstd.NewReader(nil)
 	if err != nil {
 		return nil, err
 	}
 	defer dec.Close()
-	out, err := dec.DecodeAll(fixed, dst)
+	out, err := dec.DecodeAll(fixed, nil)
 	if err != nil {
 		return nil, fmt.Errorf("zstd decode: %w", err)
+	}
+	if uint64(len(out)) != wantSize {
+		return nil, fmt.Errorf("zstd size mismatch: got %d want %d (srcSize_wrong)", len(out), wantSize)
 	}
 	return out, nil
 }

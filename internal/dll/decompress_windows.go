@@ -20,6 +20,7 @@ var (
 	mod        windows.Handle
 	baseAddr   uintptr
 	fnDecomp   uintptr
+	fnCompress uintptr
 	fnPut      uintptr
 	fnGet      uintptr
 	loadedPath string
@@ -73,6 +74,7 @@ func Load(path string) error {
 		mod = h
 		baseAddr = uintptr(h)
 		fnDecomp = baseAddr + RVADecompressAll
+		fnCompress = baseAddr + RVACompressVSZa
 		fnPut = baseAddr + RVAPutFunc
 		fnGet = baseAddr + RVAGetFunc
 		loadedPath = p
@@ -89,6 +91,49 @@ func LoadedPath() string {
 	loadMu.Lock()
 	defer loadMu.Unlock()
 	return loadedPath
+}
+
+// CompressVSZa runs the DLL's own VSZa compressor (sub_138CECC90) over data
+// and returns the finished "VSZa…zsv" container. Used by tests to produce
+// ground-truth samples for the pure-Go decoder.
+func CompressVSZa(data []byte) ([]byte, error) {
+	if err := Load(""); err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty input")
+	}
+	decompMu.Lock()
+	defer decompMu.Unlock()
+
+	outBuf := make([]byte, MaxChunkSize)
+	var buf CUtlBuffer
+	buf.Data = uintptr(unsafe.Pointer(&outBuf[0]))
+	buf.CbAllocated = int32(MaxChunkSize)
+	buf.PutFunc = fnPut
+	buf.GetFunc = fnGet
+
+	// int fn(void* data, int size, CUtlBuffer* out)
+	r1, _, callErr := syscall.SyscallN(
+		fnCompress,
+		uintptr(unsafe.Pointer(&data[0])),
+		uintptr(len(data)),
+		uintptr(unsafe.Pointer(&buf)),
+	)
+	runtime.KeepAlive(data)
+	runtime.KeepAlive(outBuf)
+	runtime.KeepAlive(buf)
+	_ = callErr
+	if r1 != 1 {
+		return nil, fmt.Errorf("VSZa compression failed (returned=%d)", r1)
+	}
+	n := int(buf.TellPut)
+	if n <= 0 || n > MaxChunkSize {
+		return nil, fmt.Errorf("compression produced invalid size %d", n)
+	}
+	out := make([]byte, n)
+	copy(out, outBuf[:n])
+	return out, nil
 }
 
 // Decompress runs the multi-format dispatcher on a post-AES chunk.

@@ -1,0 +1,20 @@
+=== Steam Workshop Downloader v6.1.1 web ===
+  Direct connection (stealth TLS: no SNI for blocked hosts, cert verified)
+[INIT] Connecting to Steam...
+[WEB] Starting Steam Workshop Downloader web UI on http://127.0.0.1:8765
+  Download dir: I:\steamcmd\steam-workshop-downloader\downloads
+  CM: CM attempt 1/5 → cmp2-hkg1.steamserver.net:27024
+  CM: wss connected cmp2-hkg1.steamserver.net (27024)
+  CM: logged on steamid=117313413927560197 session=-1515745171 cell=46 hb=9s
+OK  Logged on (117313413927560197)
+OK  Steam ready [browse] (1.5s)
+  Direct connection (stealth TLS: no SNI for blocked hosts, cert verified)
+[INIT] Connecting to Steam...
+  CM: CM attempt 1/5 → cmp2-lax1.steamserver.net:443
+  CM: wss connected cmp2-lax1.steamserver.net (443)
+  CM: logged on steamid=117313410876743982 session=131072175 cell=46 hb=9s
+OK  Logged on (117313410876743982)
+OK  Steam ready [download] (2.0s)
+  CM: read loop: read tcp 192.168.7.102:45989->162.254.195.75:443: i/o timeout
+  CM: read loop: read tcp 192.168.7.102:45987->103.28.54.101:27024: i/o timeout
+Shutting down (terminated)...

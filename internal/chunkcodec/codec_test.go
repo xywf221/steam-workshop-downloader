@@ -105,3 +105,26 @@ func TestDecompressVZaFixture(t *testing.T) {
 		t.Fatalf("VZa mismatch: got %d want %d", len(out), len(plain))
 	}
 }
+
+// TestRealVSZaSample decodes a VSZa container produced by steamclient64.dll's
+// own compressor (sub_138CECC90) — the ground truth for real depot chunks.
+func TestRealVSZaSample(t *testing.T) {
+	vsza, err := os.ReadFile("testdata/real_vsza.bin")
+	if err != nil {
+		t.Skip("real sample missing:", err)
+	}
+	plain, err := os.ReadFile("testdata/real_plain.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, format, err := DecompressWithFormat(vsza)
+	if err != nil {
+		t.Fatalf("Go decode of DLL-produced VSZa failed: %v", err)
+	}
+	if format != FormatVSZa {
+		t.Fatalf("format=%d want %d", format, FormatVSZa)
+	}
+	if !bytes.Equal(out, plain) {
+		t.Fatalf("roundtrip mismatch: got %d want %d", len(out), len(plain))
+	}
+}
