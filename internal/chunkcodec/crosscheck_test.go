@@ -1,27 +1,35 @@
 //go:build windows
 
-package chunkcodec
+package chunkcodec_test
 
 import (
 	"bytes"
 	"math/rand"
 	"testing"
 
+	"github.com/xywf221/steam-workshop-downloader/internal/chunkcodec"
 	"github.com/xywf221/steam-workshop-downloader/internal/dll"
 )
 
-// TestCrossCheckVSZaWithDLL is the definitive round-trip proof. It feeds a
-// variety of payloads through steamclient64.dll's own VSZa compressor and
-// decompressor, and requires our pure-Go decoder to produce byte-identical
-// output to the DLL's decompressor on the DLL's own compressed data.
-//
-// The sample at testdata/real_vsza.bin was produced exactly this way
-// (offline, by scripts/xcheck) and is decoded by TestRealVSZaSample; this
-// test extends coverage to more payload shapes when the DLL is present.
-func TestCrossCheckVSZaWithDLL(t *testing.T) {
-	if err := dll.Load(""); err != nil {
-		t.Skipf("steamclient64.dll unavailable: %v", err)
+// oracle loads the steamclient64.dll test oracle, skipping when unavailable.
+func oracle(t *testing.T) *dll.Decompressor {
+	t.Helper()
+	d, err := dll.NewDecompressor("") // default search includes repo-root testdata/
+	if err != nil {
+		t.Skipf("steamclient64.dll oracle unavailable: %v", err)
 	}
+	return d
+}
+
+// TestDecompressorParity proves the pure-Go decompressor and the DLL oracle
+// agree byte-for-byte on ground-truth data. Data is minted by the DLL's own
+// compressor, then both implementations must decode it identically.
+//
+// This is the switchable-implementation test: swap `goImpl` for `dllImpl`
+// anywhere production wires a Decompressor and the contract is the same.
+func TestDecompressorParity(t *testing.T) {
+	goImpl := chunkcodec.Go()
+	dllImpl := oracle(t)
 
 	rng := rand.New(rand.NewSource(42))
 	repetitive := bytes.Repeat([]byte("Steam depot chunk content! "), 5000) // ~135KB
@@ -43,18 +51,18 @@ func TestCrossCheckVSZaWithDLL(t *testing.T) {
 	}
 
 	for name, plain := range payloads {
-		vsza, err := dll.CompressVSZa(plain)
+		vsza, err := dllImpl.CompressVSZa(plain)
 		if err != nil {
 			t.Fatalf("%s: dll compress: %v", name, err)
 		}
 
-		goOut, err := Decompress(vsza)
+		goOut, err := goImpl.Decompress(vsza)
 		if err != nil {
-			t.Fatalf("%s: go decode of dll-compressed VSZa: %v", name, err)
+			t.Fatalf("%s: go decode: %v", name, err)
 		}
-		dllOut, err := dll.Decompress(vsza)
+		dllOut, err := dllImpl.Decompress(vsza)
 		if err != nil {
-			t.Fatalf("%s: dll decode of dll-compressed VSZa: %v", name, err)
+			t.Fatalf("%s: dll decode: %v", name, err)
 		}
 		if !bytes.Equal(goOut, dllOut) {
 			t.Fatalf("%s: go (%dB) != dll (%dB)", name, len(goOut), len(dllOut))
@@ -62,6 +70,7 @@ func TestCrossCheckVSZaWithDLL(t *testing.T) {
 		if !bytes.Equal(goOut, plain) {
 			t.Fatalf("%s: decoded != original (%d vs %d bytes)", name, len(goOut), len(plain))
 		}
-		t.Logf("%s: go == dll == original (%d -> %d bytes VSZa)", name, len(plain), len(vsza))
+		t.Logf("%s: %s == %s == original (%d -> %d bytes VSZa)",
+			name, goImpl.Name(), dllImpl.Name(), len(plain), len(vsza))
 	}
 }

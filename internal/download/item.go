@@ -244,7 +244,7 @@ func downloadOneFile(
 		if ctx.Err() != nil {
 			return "failed", 0, ctx.Err()
 		}
-		data, err := cdnClient.ReadFile(ctx, m, &f, chunkcodec.Decompress)
+		data, err := cdnClient.ReadFile(ctx, m, &f, chunkcodec.Go().Decompress)
 		if err != nil {
 			last = err
 			if attempt < retries {

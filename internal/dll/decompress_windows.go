@@ -45,6 +45,11 @@ func Load(path string) error {
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, filepath.Join(cwd, "steamclient64.dll"))
+		// Repo-root testdata/ holds the DLL as a test oracle. `go test` runs
+		// with CWD = the tested package's dir, so probe a few relative forms.
+		for _, up := range []string{".", "..", "../..", "../../.."} {
+			candidates = append(candidates, filepath.Join(cwd, up, "testdata", "steamclient64.dll"))
+		}
 	}
 	var last error
 	for _, p := range candidates {
