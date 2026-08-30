@@ -61,20 +61,24 @@ func Decompress(data []byte) ([]byte, error) {
 }
 
 // DecompressWithFormat additionally reports the detected Format* id.
+// Detection order mirrors the DLL dispatcher (sub_138CEAA90).
 func DecompressWithFormat(data []byte) ([]byte, int, error) {
 	switch {
-	case len(data) >= 4 && data[0] == 'V' && data[1] == 'S' && data[2] == 'Z' && data[3] == 'a':
-		out, err := decompressVSZa(data)
-		return out, FormatVSZa, err
-	case len(data) >= 2 && data[0] == 'V' && data[1] == 'Z':
-		out, err := decompressVZa(data)
-		return out, FormatVZa, err
 	case len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b:
 		out, err := gunzip(data)
 		return out, FormatGzip, err
-	case len(data) >= 2 && data[0] == 'P' && data[1] == 'K':
+	case len(data) >= 4 && data[0] == 'V' && data[1] == 'S' && data[2] == 'Z' && data[3] == 'a':
+		out, err := decompressVSZa(data)
+		return out, FormatVSZa, err
+	case len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 3 && data[3] == 4:
 		out, err := unzipFirst(data)
 		return out, FormatZip, err
+	case isRawLZMA(data):
+		out, err := decompressRawLZMA(data)
+		return out, FormatLZMA, err
+	case isVZa(data):
+		out, err := decompressVZa(data)
+		return out, FormatVZa, err
 	default:
 		// Store (uncompressed) chunks have no magic; dispatcher treats them
 		// as passthrough when nothing else matches and size fits.
@@ -85,6 +89,33 @@ func DecompressWithFormat(data []byte) ([]byte, int, error) {
 		}
 		return nil, FormatUnknown, fmt.Errorf("empty chunk")
 	}
+}
+
+// isVZa matches the dispatcher's VZa check: "VZa" + "zv" trailer, >= 0x16 bytes.
+func isVZa(data []byte) bool {
+	return len(data) >= 0x16 &&
+		data[0] == 'V' && data[1] == 'Z' && data[2] == 'a' &&
+		data[len(data)-2] == 'z' && data[len(data)-1] == 'v'
+}
+
+// isRawLZMA matches the dispatcher's heuristic for a bare LZMA stream:
+// (b0 & 0xF) == 8 and (b1 | b0<<8) is divisible by 31.
+func isRawLZMA(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+	v := int(data[1]) | int(data[0])<<8
+	return v != 0 && v%31 == 0 && data[0]&0xF == 8
+}
+
+// decompressRawLZMA handles bare LZMA streams (no header, no props). These
+// predate VZa and use LZMA's default properties (lc=3 lp=0 pb=2, 8MB dict).
+// Rare in modern depots; kept for dispatcher parity.
+func decompressRawLZMA(data []byte) ([]byte, error) {
+	// Default LZMA props byte: (pb*5+lp)*9+lc = (2*5+0)*9+3 = 93 (0x5D);
+	// dict 8 MiB.
+	props := []byte{0x5D, 0x00, 0x00, 0x80, 0x00}
+	return lzma1Decode(props, data, -1)
 }
 
 // decompressVSZa handles "VSZa" containers: header(8) + zstd frames + footer(15).

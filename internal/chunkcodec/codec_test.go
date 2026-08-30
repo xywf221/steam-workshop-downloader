@@ -1,6 +1,7 @@
 package chunkcodec
 
 import (
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
@@ -150,5 +151,77 @@ func TestRealVZaChunk(t *testing.T) {
 	}
 	if !bytes.Equal(out[:len(plain)], plain) {
 		t.Fatalf("real VZa mismatch: got %d want %d", len(out), len(plain))
+	}
+}
+
+func TestFormatDetectionOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		head []byte
+		want int
+	}{
+		{"gzip", []byte{0x1f, 0x8b, 0x08, 0x00}, FormatGzip},
+		{"VSZa", []byte{'V', 'S', 'Z', 'a'}, FormatVSZa},
+		{"ZIP", []byte{'P', 'K', 3, 4}, FormatZip},
+		{"VZa", []byte{'V', 'Z', 'a', 0}, FormatVZa},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Build a minimal valid container for each, just check detection.
+			var data []byte
+			switch c.want {
+			case FormatGzip:
+				var buf bytes.Buffer
+				w := gzip.NewWriter(&buf)
+				w.Write([]byte("x"))
+				w.Close()
+				data = buf.Bytes()
+			case FormatVSZa:
+				data = buildVSZa(t, []byte("x"), 0x28)
+			case FormatZip:
+				var buf bytes.Buffer
+				zw := zip.NewWriter(&buf)
+				f, _ := zw.Create("f")
+				f.Write([]byte("x"))
+				zw.Close()
+				data = buf.Bytes()
+			case FormatVZa:
+				data, _ = os.ReadFile("testdata/vza_fixture.bin")
+			}
+			_, got, err := DecompressWithFormat(data)
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if got != c.want {
+				t.Fatalf("%s: format=%d want %d", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestVZaNotConfusedWithVSZa guards the VSZa-vs-VZa boundary: a VSZa header
+// must not be misrouted to the VZa (LZMA) path.
+func TestVZaNotConfusedWithVSZa(t *testing.T) {
+	vsza := buildVSZa(t, []byte("hello"), 0x28)
+	if isVZa(vsza) {
+		t.Fatal("VSZa container misdetected as VZa")
+	}
+	if _, format, err := DecompressWithFormat(vsza); err != nil || format != FormatVSZa {
+		t.Fatalf("format=%d err=%v", format, err)
+	}
+}
+
+func TestIsRawLZMA(t *testing.T) {
+	// Heuristic: (b0&0xF)==8 and (b1|b0<<8)%31==0.
+	// 0x8? + b1 such that (b1 | b0<<8) % 31 == 0. b0=0x08 -> b1 | 0x800 = v.
+	// Find b1 with v%31==0: v=0x800+b1; 0x800=2048; 2048%31=2; need b1≡-2≡29 mod31 -> b1=29.
+	if !isRawLZMA([]byte{0x08, 29, 0, 0}) {
+		t.Fatal("heuristic should match crafted header")
+	}
+	if isRawLZMA([]byte{0x1f, 0x8b}) {
+		t.Fatal("gzip must not match raw-lzma heuristic")
+	}
+	if isRawLZMA([]byte{'V', 'Z'}) {
+		t.Fatal("VZa must not match raw-lzma heuristic")
 	}
 }
