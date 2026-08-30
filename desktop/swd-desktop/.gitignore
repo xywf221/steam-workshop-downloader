@@ -1,0 +1,10 @@
+# build artifacts
+swd-desktop.exe
+bin/
+build/bin/
+frontend/dist/
+frontend/node_modules/
+node_modules/
+*.log
+settings.json
+downloads/
