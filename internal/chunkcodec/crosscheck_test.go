@@ -11,25 +11,14 @@ import (
 	"github.com/xywf221/steam-workshop-downloader/internal/dll"
 )
 
-// oracle loads the steamclient64.dll test oracle, skipping when unavailable.
-func oracle(t *testing.T) *dll.Decompressor {
-	t.Helper()
-	d, err := dll.NewDecompressor("") // default search includes repo-root testdata/
+// TestDecompressorParity proves the pure-Go decoder and the DLL oracle agree
+// byte-for-byte on ground-truth data. Data is minted by the DLL's own
+// compressor, then both implementations must decode it identically.
+func TestDecompressorParity(t *testing.T) {
+	dllImpl, err := dll.NewDecompressor("") // default search includes repo-root testdata/
 	if err != nil {
 		t.Skipf("steamclient64.dll oracle unavailable: %v", err)
 	}
-	return d
-}
-
-// TestDecompressorParity proves the pure-Go decompressor and the DLL oracle
-// agree byte-for-byte on ground-truth data. Data is minted by the DLL's own
-// compressor, then both implementations must decode it identically.
-//
-// This is the switchable-implementation test: swap `goImpl` for `dllImpl`
-// anywhere production wires a Decompressor and the contract is the same.
-func TestDecompressorParity(t *testing.T) {
-	goImpl := chunkcodec.Go()
-	dllImpl := oracle(t)
 
 	rng := rand.New(rand.NewSource(42))
 	repetitive := bytes.Repeat([]byte("Steam depot chunk content! "), 5000) // ~135KB
@@ -56,7 +45,7 @@ func TestDecompressorParity(t *testing.T) {
 			t.Fatalf("%s: dll compress: %v", name, err)
 		}
 
-		goOut, err := goImpl.Decompress(vsza)
+		goOut, err := chunkcodec.Decompress(vsza)
 		if err != nil {
 			t.Fatalf("%s: go decode: %v", name, err)
 		}
@@ -70,7 +59,6 @@ func TestDecompressorParity(t *testing.T) {
 		if !bytes.Equal(goOut, plain) {
 			t.Fatalf("%s: decoded != original (%d vs %d bytes)", name, len(goOut), len(plain))
 		}
-		t.Logf("%s: %s == %s == original (%d -> %d bytes VSZa)",
-			name, goImpl.Name(), dllImpl.Name(), len(plain), len(vsza))
+		t.Logf("%s: go == dll == original (%d -> %d bytes VSZa)", name, len(plain), len(vsza))
 	}
 }

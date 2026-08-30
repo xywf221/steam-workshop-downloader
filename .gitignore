@@ -24,3 +24,4 @@ htmlcov/
 
 # Local swd-web download output
 downloads/
+web-server.log
