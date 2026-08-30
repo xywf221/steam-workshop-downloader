@@ -128,3 +128,27 @@ func TestRealVSZaSample(t *testing.T) {
 		t.Fatalf("roundtrip mismatch: got %d want %d", len(out), len(plain))
 	}
 }
+
+// TestRealVZaChunk decodes a real VZa depot chunk captured from Steam's CDN
+// (Harmony workshop item) — ground truth for the LZMA1 path. This exact chunk
+// previously broke the hand-rolled decoder.
+func TestRealVZaChunk(t *testing.T) {
+	raw, err := os.ReadFile("testdata/real_vza_chunk.bin")
+	if err != nil {
+		t.Skip("real VZa chunk missing:", err)
+	}
+	plain, err := os.ReadFile("testdata/real_vza_plain.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, format, err := DecompressWithFormat(raw)
+	if err != nil {
+		t.Fatalf("VZa decode of real chunk: %v", err)
+	}
+	if format != FormatVZa {
+		t.Fatalf("format=%d want %d", format, FormatVZa)
+	}
+	if !bytes.Equal(out[:len(plain)], plain) {
+		t.Fatalf("real VZa mismatch: got %d want %d", len(out), len(plain))
+	}
+}

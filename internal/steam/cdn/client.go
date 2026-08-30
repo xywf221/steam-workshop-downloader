@@ -259,6 +259,11 @@ func (c *Client) ManifestForWorkshopItem(ctx context.Context, itemID uint64) (*m
 	return m, nil
 }
 
+// DebugDumpCompressed, when set, receives each chunk's decrypted-but-still-
+// compressed bytes right before decompression. For test/debug only; nil in
+// production.
+var DebugDumpCompressed func(chunkID string, compressed []byte)
+
 // GetChunk downloads, decrypts, and returns a decompressed chunk.
 // chunkID is the hex encoding of the chunk SHA (as used in CDN URLs).
 // decompress is injected to avoid an import cycle with internal/dll.
@@ -283,6 +288,9 @@ func (c *Client) GetChunk(ctx context.Context, appID, depotID uint32, chunkID st
 	plain, err := crypto.SymmetricDecrypt(raw, key)
 	if err != nil {
 		return nil, fmt.Errorf("chunk decrypt: %w", err)
+	}
+	if DebugDumpCompressed != nil {
+		DebugDumpCompressed(chunkID, plain)
 	}
 	if decompress == nil {
 		return nil, fmt.Errorf("no decompressor configured")
