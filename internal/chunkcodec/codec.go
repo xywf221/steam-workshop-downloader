@@ -1,8 +1,21 @@
-// Package chunkcodec decompresses post-AES Steam depot chunks.
+// Package chunkcodec decompresses post-AES Steam depot chunks, pure Go.
 //
-// Prefer the steamclient64.dll multi-format dispatcher on Windows (handles
-// VSZa). Fall back to pure-Go handlers for VZa / gzip / ZIP when the DLL is
-// unavailable.
+// Supported formats (auto-detected by magic), matching the steamclient64.dll
+// dispatcher sub_138CEAA90:
+//
+//	VSZa  — "VSZa" + CRC + zstd frame(s) (Valve zstd magic 0xFD2FB525/26/27)
+//	VZa   — "VZa"  + CRC + LZMA1 raw payload (legacy)
+//	gzip  — 1F 8B
+//	ZIP   — "PK"   (single-entry archive)
+//	store — raw, no compression (no known magic, final fallback)
+//
+// VSZa was reverse-engineered from steamclient64.dll (see IDA notes): the
+// payload after the 8-byte header is a standard zstd frame sequence whose
+// frame magic uses Valve's renumbered constants (…25/26/27 instead of the
+// upstream …28). No dictionary is used — the "zstd_dict_valve" string in
+// the DLL is a red herring; all three decompression paths skip
+// loadDictionary. We rewrite the magic to the standard value and decode
+// with klauspost/compress.
 package chunkcodec
 
 import (
@@ -14,60 +27,152 @@ import (
 	"hash/crc32"
 	"io"
 
-	"github.com/xywf221/steam-workshop-downloader/internal/dll"
+	"github.com/klauspost/compress/zstd"
+)
+
+// Format IDs mirror the dispatcher's *format out-param.
+const (
+	FormatUnknown = 0
+	FormatStore   = 1
+	FormatGzip    = 2
+	FormatLZMA    = 3 // raw LZMA (not wired; Valve hasn't used it for years)
+	FormatZip     = 4
+	FormatVZa     = 5
+	FormatVSZa    = 7
+)
+
+// valveZstdMagics are the frame magics accepted inside VSZa payloads.
+// Standard zstd is 0xFD2FB528; Valve renumbered to 0x25/0x26/0x27.
+var valveZstdMagics = []uint32{0xFD2FB525, 0xFD2FB526, 0xFD2FB527}
+
+const (
+	vszaHeaderLen = 8  // "VSZa" + crc32
+	vszaFooterLen = 15 // crc32 + size64 + "zsv"
+	vzaHeaderLen  = 12 // "VZa" + crc32 + 5 props
+	vzaFooterLen  = 10 // crc32 + size32 + "zv"
 )
 
 // Decompress auto-detects the chunk format and returns plaintext file data.
 func Decompress(data []byte) ([]byte, error) {
-	// Try DLL first (VSZa + everything else).
-	if out, err := dll.Decompress(data); err == nil {
-		return out, nil
-	} else if isWindowsDLLError(err) {
-		// fall through to pure Go for non-VSZa
-		if out, err2 := decompressPure(data); err2 == nil {
-			return out, nil
+	out, _, err := DecompressWithFormat(data)
+	return out, err
+}
+
+// DecompressWithFormat additionally reports the detected Format* id.
+func DecompressWithFormat(data []byte) ([]byte, int, error) {
+	switch {
+	case len(data) >= 4 && data[0] == 'V' && data[1] == 'S' && data[2] == 'Z' && data[3] == 'a':
+		out, err := decompressVSZa(data)
+		return out, FormatVSZa, err
+	case len(data) >= 2 && data[0] == 'V' && data[1] == 'Z':
+		out, err := decompressVZa(data)
+		return out, FormatVZa, err
+	case len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b:
+		out, err := gunzip(data)
+		return out, FormatGzip, err
+	case len(data) >= 2 && data[0] == 'P' && data[1] == 'K':
+		out, err := unzipFirst(data)
+		return out, FormatZip, err
+	default:
+		// Store (uncompressed) chunks have no magic; dispatcher treats them
+		// as passthrough when nothing else matches and size fits.
+		if len(data) > 0 {
+			out := make([]byte, len(data))
+			copy(out, data)
+			return out, FormatStore, nil
 		}
-		return nil, err // prefer DLL error (likely VSZa needing DLL)
-	} else {
-		// DLL loaded but failed — still try pure for VZa/gzip
-		if out, err2 := decompressPure(data); err2 == nil {
-			return out, nil
-		}
+		return nil, FormatUnknown, fmt.Errorf("empty chunk")
+	}
+}
+
+// decompressVSZa handles "VSZa" containers: header(8) + zstd frames + footer(15).
+func decompressVSZa(data []byte) ([]byte, error) {
+	if len(data) < vszaHeaderLen+vszaFooterLen {
+		return nil, fmt.Errorf("VSZa too short (%d bytes)", len(data))
+	}
+	if string(data[len(data)-3:]) != "zsv" {
+		return nil, fmt.Errorf("VSZa bad footer magic %q", data[len(data)-3:])
+	}
+	wantCRC := binary.LittleEndian.Uint32(data[4:8])
+	wantSize := binary.LittleEndian.Uint64(data[len(data)-11 : len(data)-3])
+
+	payload := data[vszaHeaderLen : len(data)-vszaFooterLen]
+	out, err := decodeValveZstd(payload, wantSize)
+	if err != nil {
 		return nil, err
 	}
+	if wantSize != 0 && uint64(len(out)) != wantSize {
+		return nil, fmt.Errorf("VSZa size mismatch: got %d want %d", len(out), wantSize)
+	}
+	if crc32.ChecksumIEEE(out) != wantCRC {
+		return nil, fmt.Errorf("VSZa CRC mismatch")
+	}
+	return out, nil
 }
 
-func isWindowsDLLError(err error) bool {
-	if err == nil {
-		return false
+// decodeValveZstd decodes one or more concatenated zstd frames whose magic
+// may be a Valve-renumbered variant, standard, or a skippable frame.
+func decodeValveZstd(payload []byte, wantSize uint64) ([]byte, error) {
+	if len(payload) < 4 {
+		return nil, fmt.Errorf("zstd payload too short")
 	}
-	s := err.Error()
-	return contains(s, "Windows-only") || contains(s, "steamclient64.dll")
+	// Fast path: fix magic in a copy and let klauspost handle everything
+	// (it already understands skippable frames and concatenated frames).
+	fixed := make([]byte, len(payload))
+	copy(fixed, payload)
+	magic := binary.LittleEndian.Uint32(fixed[0:4])
+	switch magic {
+	case 0xFD2FB528:
+		// already standard
+	case valveZstdMagics[0], valveZstdMagics[1], valveZstdMagics[2]:
+		binary.LittleEndian.PutUint32(fixed[0:4], 0xFD2FB528)
+	default:
+		if magic&0xFFFFFFF0 != 0x184D2A50 { // not a skippable frame either
+			return nil, fmt.Errorf("not a zstd frame (magic=%08x)", magic)
+		}
+	}
+	dst := make([]byte, 0, max(wantSize, 64<<10))
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer dec.Close()
+	out, err := dec.DecodeAll(fixed, dst)
+	if err != nil {
+		return nil, fmt.Errorf("zstd decode: %w", err)
+	}
+	return out, nil
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || bytes.Contains([]byte(s), []byte(sub)))
+// decompressVZa handles the legacy "VZa" container (LZMA1 raw payload).
+func decompressVZa(data []byte) ([]byte, error) {
+	if len(data) < vzaHeaderLen+vzaFooterLen {
+		return nil, fmt.Errorf("VZa too short")
+	}
+	if data[len(data)-2] != 'z' || data[len(data)-1] != 'v' {
+		return nil, fmt.Errorf("VZa bad footer")
+	}
+	props := data[7:12]
+	payload := data[vzaHeaderLen : len(data)-vzaFooterLen]
+	wantCRC := binary.LittleEndian.Uint32(data[len(data)-10 : len(data)-6])
+	wantSize := binary.LittleEndian.Uint32(data[len(data)-6 : len(data)-2])
+
+	out, err := decodeLZMA1Raw(props, payload, wantSize)
+	if err != nil {
+		return nil, err
+	}
+	if wantSize != 0 && uint32(len(out)) != wantSize {
+		return nil, fmt.Errorf("VZa size mismatch: got %d want %d", len(out), wantSize)
+	}
+	if crc32.ChecksumIEEE(out) != wantCRC {
+		return nil, fmt.Errorf("VZa CRC mismatch")
+	}
+	return out, nil
 }
 
-func decompressPure(data []byte) ([]byte, error) {
-	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
-		return gunzip(data)
-	}
-	if len(data) >= 4 && data[0] == 'V' && data[1] == 'Z' {
-		return decompressVZa(data)
-	}
-	// ZIP (PK)
-	if len(data) >= 2 && data[0] == 'P' && data[1] == 'K' {
-		return unzipFirst(data)
-	}
-	return nil, fmt.Errorf("unsupported chunk format (magic=%x); VSZa requires steamclient64.dll on Windows", head(data, 4))
-}
-
-func head(b []byte, n int) []byte {
-	if len(b) < n {
-		return b
-	}
-	return b[:n]
+// decodeLZMA1Raw is implemented in vza_lzma.go (pure-Go LZMA1 decoder).
+func decodeLZMA1Raw(props, payload []byte, wantSize uint32) ([]byte, error) {
+	return lzma1Decode(props, payload, int64(wantSize))
 }
 
 func gunzip(data []byte) ([]byte, error) {
@@ -95,31 +200,9 @@ func unzipFirst(data []byte) ([]byte, error) {
 	return io.ReadAll(rc)
 }
 
-// decompressVZa implements Valve's old VZa (LZMA1) format.
-// Layout: "VZa" + CRC32 + 5B props + payload + CRC32 + size + "zv"
-func decompressVZa(data []byte) ([]byte, error) {
-	if len(data) < 22 {
-		return nil, fmt.Errorf("VZa too short")
+func max(a, b uint64) uint64 {
+	if a > b {
+		return a
 	}
-	if data[0] != 'V' || data[1] != 'Z' || data[2] != 'a' {
-		return nil, fmt.Errorf("not VZa")
-	}
-	if data[len(data)-2] != 'z' || data[len(data)-1] != 'v' {
-		return nil, fmt.Errorf("VZa bad footer")
-	}
-	// Use standard library: Go 1.x has no raw LZMA1 in compress; try xz via
-	// manual — actually stdlib has no FILTER_LZMA1. Keep DLL path primary.
-	// Attempt: treat as zip-incompatible; return clear error so DLL is used.
-	_ = binary.LittleEndian.Uint32(data[3:7]) // crc
-	props := data[7:12]
-	payload := data[12 : len(data)-10]
-	footer := data[len(data)-10 : len(data)-2]
-	crcExpect := binary.LittleEndian.Uint32(footer[0:4])
-	sizeExpect := binary.LittleEndian.Uint32(footer[4:8])
-	_ = props
-	_ = payload
-	_ = crcExpect
-	_ = sizeExpect
-	_ = crc32.ChecksumIEEE
-	return nil, fmt.Errorf("pure-Go VZa LZMA1 not bundled; use steamclient64.dll dispatcher")
+	return b
 }
