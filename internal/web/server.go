@@ -203,14 +203,14 @@ func (s *Server) render(w http.ResponseWriter, name string, data map[string]any)
 	}
 }
 
-func (s *Server) parseListArgs(r *http.Request) (appID int, q string, page, perPage int, sort, cursor string, err error) {
+func (s *Server) parseListArgs(r *http.Request) (appID int, q string, page, perPage int, sort, cursor string, lang int, err error) {
 	appRaw := r.URL.Query().Get("appid")
 	if appRaw == "" {
-		return 0, "", 0, 0, "", "", fmt.Errorf("missing required query parameter: appid")
+		return 0, "", 0, 0, "", "", 0, fmt.Errorf("missing required query parameter: appid")
 	}
 	appID, err = strconv.Atoi(appRaw)
 	if err != nil || appID <= 0 {
-		return 0, "", 0, 0, "", "", fmt.Errorf("appid must be a positive integer")
+		return 0, "", 0, 0, "", "", 0, fmt.Errorf("appid must be a positive integer")
 	}
 	q = strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
@@ -229,10 +229,11 @@ func (s *Server) parseListArgs(r *http.Request) (appID int, q string, page, perP
 	}
 	sort = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort")))
 	cursor = strings.TrimSpace(r.URL.Query().Get("cursor"))
-	return appID, q, page, perPage, sort, cursor, nil
+	lang, _ = strconv.Atoi(r.URL.Query().Get("lang"))
+	return appID, q, page, perPage, sort, cursor, lang, nil
 }
 
-func (s *Server) runQuery(ctx context.Context, appID int, q string, page, perPage int, sort, cursor string) (workshop.QueryResult, error) {
+func (s *Server) runQuery(ctx context.Context, appID int, q string, page, perPage int, sort, cursor string, lang int) (workshop.QueryResult, error) {
 	sortKey := sort
 	if sortKey == "" {
 		if q != "" {
@@ -242,14 +243,14 @@ func (s *Server) runQuery(ctx context.Context, appID int, q string, page, perPag
 		}
 	}
 	queryType := workshop.ResolveQueryType(sort, q)
-	useCursor := s.cache.CursorForPage(appID, q, sortKey, page, perPage, cursor)
-	key := QueryKey(appID, q, sortKey, page, perPage, useCursor)
+	useCursor := s.cache.CursorForPage(appID, q, sortKey, page, perPage, lang, cursor)
+	key := QueryKey(appID, q, sortKey, page, perPage, useCursor, lang)
 	if cached, ok := s.cache.GetQuery(key); ok {
 		return cached, nil
 	}
 
 	val, err := s.browse.CallCtx(ctx, workerWait, func(ctx context.Context, sess *steam.Session, _ *cdn.Client) (any, error) {
-		return workshop.QueryFiles(ctx, sess.CM, appID, q, page, perPage, queryType, useCursor, s.log)
+		return workshop.QueryFiles(ctx, sess.CM, appID, q, page, perPage, queryType, useCursor, lang, s.log)
 	})
 	if err != nil {
 		return workshop.QueryResult{}, err
@@ -259,13 +260,13 @@ func (s *Server) runQuery(ctx context.Context, appID int, q string, page, perPag
 	return result, nil
 }
 
-func (s *Server) runDetail(ctx context.Context, itemID uint64) (*workshop.Item, error) {
-	if it, ok := s.cache.GetItem(itemID); ok {
+func (s *Server) runDetail(ctx context.Context, itemID uint64, lang int) (*workshop.Item, error) {
+	if it, ok := s.cache.GetItem(itemID, lang); ok {
 		cp := it
 		return &cp, nil
 	}
 	val, err := s.browse.CallCtx(ctx, workerWait, func(ctx context.Context, sess *steam.Session, _ *cdn.Client) (any, error) {
-		return workshop.GetItemDetails(ctx, sess.CM, itemID, s.log)
+		return workshop.GetItemDetails(ctx, sess.CM, itemID, lang, s.log)
 	})
 	if err != nil {
 		return nil, err
@@ -275,7 +276,7 @@ func (s *Server) runDetail(ctx context.Context, itemID uint64) (*workshop.Item, 
 	}
 	item := val.(*workshop.Item)
 	if item != nil {
-		s.cache.PutItem(*item)
+		s.cache.PutItem(*item, lang)
 	}
 	return item, nil
 }

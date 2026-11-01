@@ -229,7 +229,7 @@ func (c *Client) GetManifest(ctx context.Context, appID, depotID uint32, manifes
 
 // ManifestForWorkshopItem resolves a workshop item to its SteamPipe manifest.
 func (c *Client) ManifestForWorkshopItem(ctx context.Context, itemID uint64) (*manifest.Manifest, error) {
-	items, err := workshop.GetDetails(ctx, c.CM, []uint64{itemID}, false, c.Log)
+	items, err := workshop.GetDetails(ctx, c.CM, []uint64{itemID}, false, workshop.LanguageAuto, c.Log)
 	if err != nil {
 		return nil, err
 	}

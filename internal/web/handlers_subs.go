@@ -99,7 +99,7 @@ func (s *Server) apiSubsAdd(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return nil, err
 			}
-			items, _ := workshop.GetDetails(ctx, sess.CM, ids, false, s.log)
+			items, _ := workshop.GetDetails(ctx, sess.CM, ids, false, workshop.LanguageAuto, s.log)
 			titles := make(map[uint64]string, len(items))
 			for _, it := range items {
 				titles[it.ID] = it.Title

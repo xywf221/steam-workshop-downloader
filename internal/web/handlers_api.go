@@ -24,12 +24,12 @@ func (s *Server) apiHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiWorkshopList(w http.ResponseWriter, r *http.Request) {
-	appID, q, page, perPage, sort, cursor, err := s.parseListArgs(r)
+	appID, q, page, perPage, sort, cursor, lang, err := s.parseListArgs(r)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	result, err := s.runQuery(r.Context(), appID, q, page, perPage, sort, cursor)
+	result, err := s.runQuery(r.Context(), appID, q, page, perPage, sort, cursor, lang)
 	if err != nil {
 		if s.log != nil {
 			s.log.Err(fmt.Sprintf("QueryFiles failed: %v", err))
@@ -46,7 +46,8 @@ func (s *Server) apiWorkshopDetail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid item id")
 		return
 	}
-	item, err := s.runDetail(r.Context(), id)
+	lang, _ := strconv.Atoi(r.URL.Query().Get("lang"))
+	item, err := s.runDetail(r.Context(), id, lang)
 	if err != nil {
 		if s.log != nil {
 			s.log.Err(fmt.Sprintf("GetDetails failed for %d: %v", id, err))

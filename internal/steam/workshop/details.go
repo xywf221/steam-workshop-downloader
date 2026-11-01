@@ -47,7 +47,8 @@ type Item struct {
 func (it Item) IsCollection() bool { return it.FileType == FileTypeCollection }
 
 // GetDetails fetches PublishedFile.GetDetails for the given ids.
-func GetDetails(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool, log *ui.Log) ([]Item, error) {
+// language is an ELanguage value; 0 = Steam default (usually English).
+func GetDetails(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool, language int, log *ui.Log) ([]Item, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -58,7 +59,7 @@ func GetDetails(ctx context.Context, client *cm.Client, ids []uint64, includeChi
 			end = len(ids)
 		}
 		batch := ids[start:end]
-		items, err := getDetailsBatch(ctx, client, batch, includeChildren)
+		items, err := getDetailsBatch(ctx, client, batch, includeChildren, language)
 		if err != nil {
 			if log != nil {
 				log.Err(fmt.Sprintf("Failed to resolve batch %v: %v", batch, err))
@@ -70,7 +71,7 @@ func GetDetails(ctx context.Context, client *cm.Client, ids []uint64, includeChi
 	return out, nil
 }
 
-func getDetailsBatch(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool) ([]Item, error) {
+func getDetailsBatch(ctx context.Context, client *cm.Client, ids []uint64, includeChildren bool, language int) ([]Item, error) {
 	var enc pb.Encoder
 	for _, id := range ids {
 		enc.Fixed64Field(1, id) // publishedfileids repeated fixed64
@@ -83,7 +84,7 @@ func getDetailsBatch(ctx context.Context, client *cm.Client, ids []uint64, inclu
 	enc.BoolField(8, true)            // short_description
 	enc.BoolField(10, false)          // includeforsaledata
 	enc.BoolField(11, false)          // includemetadata
-	enc.VarintField(12, 0)            // language
+	enc.VarintField(12, uint64(language)) // language
 
 	_, body, err := client.SendUM(ctx, "PublishedFile.GetDetails#1", enc.Bytes(), UMTimeout)
 	if err != nil {
@@ -133,7 +134,7 @@ func ResolveIDs(ctx context.Context, client *cm.Client, ids []uint64, log *ui.Lo
 
 	var walk func([]uint64) error
 	walk = func(batch []uint64) error {
-		items, err := GetDetails(ctx, client, batch, true, log)
+		items, err := GetDetails(ctx, client, batch, true, LanguageAuto, log)
 		if err != nil {
 			return err
 		}

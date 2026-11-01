@@ -26,12 +26,14 @@ func (s *Server) indexPage(w http.ResponseWriter, r *http.Request) {
 		perPage = maxQueryPageSize
 	}
 	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	lang, _ := strconv.Atoi(r.URL.Query().Get("lang"))
 
 	data["AppID"] = appidRaw
 	data["Q"] = q
 	data["Page"] = page
 	data["PerPage"] = perPage
 	data["Cursor"] = cursor
+	data["Lang"] = lang
 	data["HasQuery"] = strings.TrimSpace(appidRaw) != ""
 	data["ProxyEnabled"] = s.cfg.ProxyURL != ""
 	data["Items"] = []ItemDict{}
@@ -55,7 +57,7 @@ func (s *Server) indexPage(w http.ResponseWriter, r *http.Request) {
 		if err != nil || appID <= 0 {
 			data["Error"] = "AppID must be a positive integer."
 		} else {
-			result, err := s.runQuery(r.Context(), appID, q, page, perPage, sort, cursor)
+			result, err := s.runQuery(r.Context(), appID, q, page, perPage, sort, cursor, lang)
 			if err != nil {
 				if s.log != nil {
 					s.log.Err(fmt.Sprintf("QueryFiles failed: %v", err))
@@ -98,7 +100,8 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request) {
 	data["Error"] = ""
 	data["Item"] = nil
 
-	item, err := s.runDetail(r.Context(), id)
+	lang, _ := strconv.Atoi(r.URL.Query().Get("lang"))
+	item, err := s.runDetail(r.Context(), id, lang)
 	if err != nil {
 		if s.log != nil {
 			s.log.Err(fmt.Sprintf("GetDetails failed for %d: %v", id, err))

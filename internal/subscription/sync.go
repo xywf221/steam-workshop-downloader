@@ -35,7 +35,7 @@ func CheckUpdates(ctx context.Context, s *Store, client *cm.Client, log *ui.Log)
 	for i, e := range entries {
 		ids[i] = e.WorkshopID
 	}
-	items, err := workshop.GetDetails(ctx, client, ids, false, log)
+	items, err := workshop.GetDetails(ctx, client, ids, false, workshop.LanguageAuto, log)
 	if err != nil {
 		return nil, fmt.Errorf("GetDetails: %w", err)
 	}

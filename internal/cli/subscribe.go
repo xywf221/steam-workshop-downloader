@@ -101,7 +101,7 @@ func (c *SubAddCmd) Run() error {
 	if err != nil {
 		return fmt.Errorf("resolve: %w", err)
 	}
-	items, err := workshop.GetDetails(ctx, sess.CM, resolved, false, log)
+	items, err := workshop.GetDetails(ctx, sess.CM, resolved, false, workshop.LanguageAuto, log)
 	if err != nil {
 		return err
 	}

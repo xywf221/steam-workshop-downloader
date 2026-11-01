@@ -25,6 +25,21 @@
         <option value="search" {{if eq .Sort "search"}}selected{{end}}>Text relevance</option>
       </select>
     </label>
+    <label class="field">
+      <span>Language</span>
+      <select class="input" name="lang">
+        <option value="0" {{if eq .Lang 0}}selected{{end}}>Auto</option>
+        <option value="1" {{if eq .Lang 1}}selected{{end}}>English</option>
+        <option value="7" {{if eq .Lang 7}}selected{{end}}>简体中文</option>
+        <option value="8" {{if eq .Lang 8}}selected{{end}}>繁體中文</option>
+        <option value="5" {{if eq .Lang 5}}selected{{end}}>한국어</option>
+        <option value="10" {{if eq .Lang 10}}selected{{end}}>日本語</option>
+        <option value="9" {{if eq .Lang 9}}selected{{end}}>Русский</option>
+        <option value="2" {{if eq .Lang 2}}selected{{end}}>Deutsch</option>
+        <option value="3" {{if eq .Lang 3}}selected{{end}}>Français</option>
+        <option value="6" {{if eq .Lang 6}}selected{{end}}>Español</option>
+      </select>
+    </label>
     <button class="btn" type="submit">Search</button>
   </form>
   <p class="hint">RimWorld <code>294100</code> · Wallpaper Engine <code>431960</code> · CLI: <code>swd &lt;appid&gt; &lt;workshopid&gt;</code></p>
@@ -44,7 +59,7 @@
   <div class="card-grid">
     {{range .Items}}
     <div class="card">
-      <a class="card-main" href="/item/{{index . "id"}}{{if $.AppID}}?appid={{$.AppID}}{{end}}">
+      <a class="card-main" href="/item/{{index . "id"}}?appid={{$.AppID}}&amp;lang={{$.Lang}}">
         <div class="card-preview">
           {{if index . "preview_src"}}
           <img src="{{index . "preview_src"}}" alt="" loading="lazy" referrerpolicy="no-referrer">
@@ -88,9 +103,9 @@
     {{end}}
     <span class="page-num">{{.Page}} / {{.TotalPages}}</span>
     {{if and .NextCursor (lt .Page .TotalPages)}}
-    <a href="/?appid={{.AppID}}&amp;q={{urlquery .Q}}&amp;sort={{urlquery .Sort}}&amp;page={{add .Page 1}}&amp;per_page={{.PerPage}}&amp;cursor={{urlquery .NextCursor}}">Next →</a>
+    <a href="/?appid={{.AppID}}&amp;q={{urlquery .Q}}&amp;sort={{urlquery .Sort}}&amp;lang={{.Lang}}&amp;page={{add .Page 1}}&amp;per_page={{.PerPage}}&amp;cursor={{urlquery .NextCursor}}">Next →</a>
     {{else if lt .Page .TotalPages}}
-    <a href="/?appid={{.AppID}}&amp;q={{urlquery .Q}}&amp;sort={{urlquery .Sort}}&amp;page={{add .Page 1}}&amp;per_page={{.PerPage}}">Next →</a>
+    <a href="/?appid={{.AppID}}&amp;q={{urlquery .Q}}&amp;sort={{urlquery .Sort}}&amp;lang={{.Lang}}&amp;page={{add .Page 1}}&amp;per_page={{.PerPage}}">Next →</a>
     {{else}}
     <span class="disabled">Next →</span>
     {{end}}

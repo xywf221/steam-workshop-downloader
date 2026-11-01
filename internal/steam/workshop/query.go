@@ -19,6 +19,34 @@ const (
 	QueryTypeRankedByTextSearch              = 12
 )
 
+// ELanguage values for the language field in PublishedFile requests.
+const (
+	LanguageAuto               = 0
+	LanguageEnglish            = 1
+	LanguageGerman             = 2
+	LanguageFrench             = 3
+	LanguageItalian            = 4
+	LanguageKorean             = 5
+	LanguageSpanish            = 6
+	LanguageSimplifiedChinese  = 7
+	LanguageTraditionalChinese = 8
+	LanguageRussian            = 9
+	LanguageJapanese           = 10
+	LanguagePortuguese         = 11
+	LanguagePolish             = 12
+	LanguageDanish             = 13
+	LanguageDutch              = 14
+	LanguageSwedish            = 15
+	LanguageThai               = 16
+	LanguageTurkish            = 17
+	LanguageArabic             = 18
+	LanguageFinnish            = 19
+	LanguageGreek              = 20
+	LanguageCzech              = 21
+	LanguageHungarian          = 22
+	LanguageRomanian           = 23
+)
+
 // QueryCursorStart is Steam's first-page cursor token for QueryFiles.
 const QueryCursorStart = "*"
 
@@ -56,6 +84,7 @@ type QueryResult struct {
 
 // QueryFiles browses / searches Workshop items for appID.
 // Prefer cursor pagination: empty cursor on page 1 becomes "*"; pass NextCursor thereafter.
+// language is an ELanguage value; 0 = Steam default (usually English).
 func QueryFiles(
 	ctx context.Context,
 	client *cm.Client,
@@ -63,6 +92,7 @@ func QueryFiles(
 	searchText string,
 	page, perPage, queryType int,
 	cursor string,
+	language int,
 	log *ui.Log,
 ) (QueryResult, error) {
 	if page < 1 {
@@ -98,8 +128,8 @@ func QueryFiles(
 	enc.BoolField(18, true)  // return_tags
 	enc.BoolField(20, true)  // return_previews
 	enc.BoolField(22, true)  // return_short_description
-	enc.VarintField(31, 300) // cache_max_age_seconds
-	enc.VarintField(33, 0)   // language
+	enc.VarintField(31, 300)               // cache_max_age_seconds
+	enc.VarintField(33, uint64(language)) // language
 	enc.BoolField(37, false) // return_details
 	enc.BoolField(38, true)  // strip_description_bbcode
 	if useCursor != "" {
@@ -138,7 +168,8 @@ func parseQueryFilesResponse(body []byte, page, perPage int) (QueryResult, error
 }
 
 // GetItemDetails fetches one item with tags / votes / description for the UI.
-func GetItemDetails(ctx context.Context, client *cm.Client, id uint64, log *ui.Log) (*Item, error) {
+// language is an ELanguage value; 0 = Steam default (usually English).
+func GetItemDetails(ctx context.Context, client *cm.Client, id uint64, language int, log *ui.Log) (*Item, error) {
 	var enc pb.Encoder
 	enc.Fixed64Field(1, id)
 	enc.BoolField(2, true)  // includetags
@@ -149,7 +180,7 @@ func GetItemDetails(ctx context.Context, client *cm.Client, id uint64, log *ui.L
 	enc.BoolField(8, true)  // short_description
 	enc.BoolField(10, false)
 	enc.BoolField(11, false)
-	enc.VarintField(12, 0) // language
+	enc.VarintField(12, uint64(language)) // language
 
 	_, body, err := client.SendUM(ctx, "PublishedFile.GetDetails#1", enc.Bytes(), UMTimeout)
 	if err != nil {

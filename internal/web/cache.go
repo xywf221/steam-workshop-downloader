@@ -102,56 +102,61 @@ func NewBrowseCache() *BrowseCache {
 }
 
 // QueryKey builds a cache key for a list query.
-func QueryKey(appID int, q, sort string, page, perPage int, cursor string) [6]any {
-	return [6]any{appID, q, sort, page, perPage, cursor}
+func QueryKey(appID int, q, sort string, page, perPage int, cursor string, lang int) [7]any {
+	return [7]any{appID, q, sort, page, perPage, cursor, lang}
 }
 
-func pageChainKey(appID int, q, sort string, page, perPage int) [5]any {
-	return [5]any{appID, q, sort, page, perPage}
+func pageChainKey(appID int, q, sort string, page, perPage, lang int) [6]any {
+	return [6]any{appID, q, sort, page, perPage, lang}
 }
 
 // GetQuery returns a cached query result.
-func (c *BrowseCache) GetQuery(key [6]any) (workshop.QueryResult, bool) {
+func (c *BrowseCache) GetQuery(key [7]any) (workshop.QueryResult, bool) {
 	return c.queries.get(key)
 }
 
 // PutQuery stores a query result and seeds item cache + page cursor chain.
-func (c *BrowseCache) PutQuery(key [6]any, result workshop.QueryResult) {
+func (c *BrowseCache) PutQuery(key [7]any, result workshop.QueryResult) {
 	c.queries.put(key, result)
-	for _, it := range result.Items {
-		c.PutItem(it)
-	}
 	appID, _ := key[0].(int)
 	q, _ := key[1].(string)
 	sort, _ := key[2].(string)
 	page, _ := key[3].(int)
 	perPage, _ := key[4].(int)
+	lang, _ := key[6].(int)
+	for _, it := range result.Items {
+		c.PutItem(it, lang)
+	}
 	if result.NextCursor != "" {
-		c.pageNext.put(pageChainKey(appID, q, sort, page, perPage), result.NextCursor)
+		c.pageNext.put(pageChainKey(appID, q, sort, page, perPage, lang), result.NextCursor)
 	}
 }
 
 // CursorForPage resolves the Steam cursor for this page request.
-func (c *BrowseCache) CursorForPage(appID int, q, sort string, page, perPage int, cursor string) string {
+func (c *BrowseCache) CursorForPage(appID int, q, sort string, page, perPage int, lang int, cursor string) string {
 	if cursor != "" {
 		return cursor
 	}
 	if page <= 1 {
 		return ""
 	}
-	prev, ok := c.pageNext.get(pageChainKey(appID, q, sort, page-1, perPage))
+	prev, ok := c.pageNext.get(pageChainKey(appID, q, sort, page-1, perPage, lang))
 	if !ok {
 		return ""
 	}
 	return prev
 }
 
-// GetItem returns a cached item.
-func (c *BrowseCache) GetItem(id uint64) (workshop.Item, bool) {
-	return c.items.get(int(id))
+// GetItem returns a cached item for the given id and language.
+func (c *BrowseCache) GetItem(id uint64, lang int) (workshop.Item, bool) {
+	return c.items.get(itemCacheKey(id, lang))
 }
 
-// PutItem stores an item by id.
-func (c *BrowseCache) PutItem(item workshop.Item) {
-	c.items.put(int(item.ID), item)
+// PutItem stores an item by id + language.
+func (c *BrowseCache) PutItem(item workshop.Item, lang int) {
+	c.items.put(itemCacheKey(item.ID, lang), item)
+}
+
+func itemCacheKey(id uint64, lang int) [2]any {
+	return [2]any{id, lang}
 }
